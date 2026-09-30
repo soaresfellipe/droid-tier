@@ -2,6 +2,8 @@
 import datetime as dt
 import os
 import shutil
+import sys
+import time
 
 from rich.text import Text
 from textual import on
@@ -862,6 +864,28 @@ class DroidTierApp(App):
         self.push_screen(MainScreen())
 
 
+def discard_pending_input(wait=0.3):
+    """Joga fora o que chegou no terminal depois que o Textual parou de ler.
+
+    O Textual desliga o rastreamento do mouse ao sair, mas relatorios que o
+    terminal ja tinha enviado (ex.: ^[[<35;11;22M) ainda estao a caminho,
+    principalmente por SSH, e cairiam no shell como texto."""
+    time.sleep(wait)
+    try:
+        if os.name == "nt":
+            import msvcrt
+            while msvcrt.kbhit():
+                msvcrt.getwch()
+        elif sys.stdin.isatty():
+            import termios
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except (OSError, ValueError):
+        pass
+
+
 def run_tui(config_path=None):
     core.ECHO = False
-    DroidTierApp(config_path).run()
+    try:
+        DroidTierApp(config_path).run()
+    finally:
+        discard_pending_input()
