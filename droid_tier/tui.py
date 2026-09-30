@@ -68,6 +68,15 @@ class State:
     def providers(self):
         return configedit.get_providers(self.doc)
 
+    def seen_native_ids(self):
+        """IDs nativos ja usados no settings, nos padroes guardados ou nos fallbacks."""
+        seen = {m for m, _ in core.snapshot(self.settings).values()}
+        seen |= {m for m, _ in (core.read_home() or {}).values()}
+        for fb in configedit.get_fallbacks(self.doc):
+            if fb.get("pool"):
+                seen |= {(fb.get(r) or "").split("@")[0] for r in core.ROLES}
+        return sorted(m for m in seen if m and not m.startswith("custom:"))
+
     def provider_models(self, pid):
         p = self.providers().get(pid) or {}
         managed = set(p.get("models") or [])
@@ -482,6 +491,7 @@ class FallbackEditScreen(Screen):
     def __init__(self, index):
         super().__init__()
         self.index = index
+        self.extra = set()
 
     def compose(self):
         st = self.app.state
@@ -498,6 +508,8 @@ class FallbackEditScreen(Screen):
             yield Input(value=self.fb.get("name", ""), id="name")
             yield Label("De onde vêm os modelos")
             yield Select(sources, value=current, prompt="escolha…", id="source")
+            yield Label("Modelo que não aparece na lista? Digite o ID e Enter")
+            yield Input(placeholder="ex.: deepseek-v4.1-flash", id="extra")
             yield Static("Papel sem modelo = não alterado. Esforço vazio = o que estiver no settings.",
                          classes="hint")
             for role, label in ROLE_LABELS.items():
@@ -531,21 +543,37 @@ class FallbackEditScreen(Screen):
             if not natives:
                 self.notify("Não achei o `droid` no PATH para listar os modelos da Factory.", severity="warning")
             options = [(f"{m.name} ({m.id})", m.id) for m in natives if m.pool == pool and not m.deprecated]
+            # O `droid exec --help` omite modelos que funcionam; os que ja estao em uso entram tambem.
+            listed = {v for _, v in options}
+            options += [(f"{mid} (fora da lista)", mid) for mid in st.seen_native_ids()
+                        if mid not in listed and core.infer_pool({"x": (mid, None)}) == pool]
         elif isinstance(source, str) and source.startswith("provider:"):
             options = [(mid, mid) for mid in st.provider_models(source[9:])]
         values = {v for _, v in options}
+        options += [(f"{mid} (digitado)", mid) for mid in sorted(self.extra) if mid not in values]
+        values |= self.extra
         for role in core.ROLES:
-            model, _, effort = (self.fb.get(role) or "").partition("@")
-            if model and model not in values:
-                options_role = options + [(f"{model} (não encontrado)", model)]
-            else:
-                options_role = options
             sel = self.query_one(f"#m-{role}", Select)
+            saved, _, effort = (self.fb.get(role) or "").partition("@")
+            model = sel.value if isinstance(sel.value, str) else saved
+            options_role = options
+            if model and model not in values:
+                options_role = options + [(f"{model} (fora da lista)", model)]
             sel.set_options(options_role)
             if model:
                 sel.value = model
-            if effort:
-                self.query_one(f"#e-{role}", Select).value = effort
+            esel = self.query_one(f"#e-{role}", Select)
+            if effort and esel.value is Select.NULL:
+                esel.value = effort
+
+    @on(Input.Submitted, "#extra")
+    def add_extra(self, event):
+        mid = event.value.strip()
+        if mid:
+            self.extra.add(mid)
+            event.input.value = ""
+            self.fill_models()
+            self.notify(f"{mid} adicionado às opções")
 
     @on(Button.Pressed, "#save")
     def action_save(self):

@@ -54,6 +54,39 @@ class TuiFlowTest(unittest.TestCase):
         resolved = core.resolve_all(cfg, s)["oc"]
         self.assertEqual(resolved["session"], ("custom:OC-GLM-5.3-Flash-0", "high"))
 
+    def test_pool_fallback_with_typed_model(self):
+        async def flow():
+            app = DroidTierApp(self.config)
+            async with app.run_test(size=(120, 50)) as pilot:
+                await pilot.pause()
+                app.push_screen(FallbackEditScreen(None))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                scr = app.screen
+                scr.query_one("#name", Input).value = "droid"
+                scr.query_one("#source", Select).value = "pool:core"
+                await pilot.pause()
+                models = scr.query_one("#m-session", Select)
+                self.assertIn("glm-5.3-flash", [v for _, v in models._options])
+                # claude-opus-5-5 esta no settings, mas e Standard: nao entra no pool core
+                self.assertNotIn("claude-opus-5-5", [v for _, v in models._options])
+                await pilot.click("#extra")
+                await pilot.press(*"deepseek-v4.1-flash", "enter")
+                await pilot.pause()
+                scr.query_one("#m-session", Select).value = "glm-5.3-flash"
+                scr.query_one("#m-validator", Select).value = "deepseek-v4.1-flash"
+                scr.query_one("#e-validator", Select).value = "high"
+                await pilot.pause()
+                # a escolha feita antes de digitar o ID extra sobrevive ao refresh
+                self.assertEqual(scr.query_one("#m-session", Select).value, "glm-5.3-flash")
+                await pilot.press("ctrl+s")
+                await pilot.pause()
+
+        asyncio.run(flow())
+        fb = core.load_config(self.config)["fallbacks"][0]
+        self.assertEqual((fb["pool"], fb["session"], fb["validator"]),
+                         ("core", "glm-5.3-flash", "deepseek-v4.1-flash@high"))
+
     async def flow(self):
         app = DroidTierApp(self.config)
         async with app.run_test(size=(120, 50)) as pilot:
