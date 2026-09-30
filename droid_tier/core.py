@@ -133,11 +133,23 @@ def check_url(url, what):
 ECHO = True  # the TUI turns this off: printing in the middle of Textual garbles the screen
 
 
+def ensure_state_dir():
+    """The state folder holds the log and the saved defaults; keep it private.
+
+    mode=0700 on creation, plus a chmod that also tightens folders that already
+    existed with a looser umask (a no-op on Windows, where ACLs rule)."""
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(STATE_DIR, 0o700)
+    except OSError:
+        pass
+
+
 def log(msg):
     line = f"{dt.datetime.now().astimezone():%Y-%m-%d %H:%M:%S%z} {msg}"
     if ECHO:
         print(line)
-    os.makedirs(STATE_DIR, exist_ok=True)
+    ensure_state_dir()
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
@@ -423,7 +435,7 @@ def read_home():
 
 
 def save_home(roles):
-    os.makedirs(STATE_DIR, exist_ok=True)
+    ensure_state_dir()
     with open(HOME_FILE, "w", encoding="utf-8") as f:
         json.dump({"savedAt": dt.datetime.now().astimezone().isoformat(),
                    "roles": {r: list(v) for r, v in roles.items()}}, f, indent=2)
@@ -488,7 +500,7 @@ def tier_names(cfg):
 
 
 def write_pin(name):
-    os.makedirs(STATE_DIR, exist_ok=True)
+    ensure_state_dir()
     with open(PIN_FILE, "w", encoding="utf-8") as f:
         f.write(name + "\n")
 
@@ -554,7 +566,7 @@ def run(cfg):
         # No reliable answer, so don't touch anything: better to stay put than to guess.
         log(f"failed to fetch limits: {e}; staying on {before}")
         if not os.path.exists(api_error_file()):  # notify when it starts, not every run
-            os.makedirs(STATE_DIR, exist_ok=True)
+            ensure_state_dir()
             open(api_error_file(), "w").close()
             notify.send(cfg, "droid-tier: can't read limits",
                         f"Factory's API failed ({e}). Droid stays on {before} until it's back.",
@@ -596,7 +608,7 @@ def _flag(name, on):
     if on == os.path.exists(path):
         return False
     if on:
-        os.makedirs(STATE_DIR, exist_ok=True)
+        ensure_state_dir()
         open(path, "w").close()
     else:
         os.remove(path)
