@@ -1,17 +1,11 @@
 import copy
 import datetime as dt
-import importlib.machinery
-import importlib.util
 import json
 import os
 import tempfile
 import unittest
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-_loader = importlib.machinery.SourceFileLoader("droid_tier", os.path.join(HERE, "..", "droid-tier"))
-_spec = importlib.util.spec_from_loader("droid_tier", _loader)
-m = importlib.util.module_from_spec(_spec)
-_loader.exec_module(m)
+import droid_tier.core as m
 
 NOW = dt.datetime(2026, 9, 30, 12, 0, tzinfo=dt.timezone.utc)
 FUTURE = "2026-10-05T04:35:21.628Z"

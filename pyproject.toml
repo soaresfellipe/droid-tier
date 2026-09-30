@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "droid-tier"
+version = "0.2.0"
+description = "Troca automaticamente os modelos do Droid (Factory) quando os limites de uso acabam"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Fellipe Soares" }]
+dependencies = ["textual>=1.0", "tomlkit>=0.12"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+droid-tier = "droid_tier.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/soaresfellipe/droid-tier"
+
+[tool.hatch.build.targets.wheel]
+packages = ["droid_tier"]

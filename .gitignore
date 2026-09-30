@@ -4,3 +4,5 @@ settings.json
 settings.json.*
 config.local.*
 __pycache__/
+.venv/
+*.egg-info/

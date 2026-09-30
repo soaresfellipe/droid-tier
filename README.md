@@ -17,14 +17,13 @@ ele restaura exatamente o que estava lá.
 seus padrões  ->  Droid Core (GLM, DeepSeek...)  ->  provider externo (OpenCode Go, OpenRouter...)
 ```
 
-## Instalação (Linux)
+## Instalação
 
-Requer Python 3.11+ (sem dependências).
+Requer Python 3.11+. Com [uv](https://docs.astral.sh/uv/) ou pipx:
 
 ```sh
-install -m 755 droid-tier ~/.local/bin/droid-tier
-droid-tier init            # cria ~/.config/droid-tier/config.toml
-droid-tier check           # mostra seus padrões e os fallbacks resolvidos
+uv tool install git+https://github.com/soaresfellipe/droid-tier
+# ou: pipx install git+https://github.com/soaresfellipe/droid-tier
 ```
 
 Crie uma API key da Factory em app.factory.ai/settings/api-keys e grave em
@@ -36,12 +35,36 @@ FACTORY_API_KEY=fk-...
 
 Não exporte essa variável no shell: o Droid passaria a usar a key no lugar do seu login.
 
-Para rodar a cada 5 minutos com systemd:
+Depois abra a interface para cadastrar providers e montar os fallbacks:
+
+```sh
+droid-tier setup
+```
+
+Para rodar a cada 5 minutos com systemd (Linux):
 
 ```sh
 cp contrib/systemd/droid-tier.* ~/.config/systemd/user/
 systemctl --user enable --now droid-tier.timer
 ```
+
+## Interface (`droid-tier setup`)
+
+1. **Providers e modelos**: escolha um provider do catálogo do
+   [models.dev](https://models.dev) (OpenCode Go, OpenRouter, Z.AI, DeepSeek...) ou
+   informe uma URL compatível com OpenAI/Anthropic, cole a API key e marque os
+   modelos que quer usar. A lista vem do `/models` do próprio provider (o que a sua
+   key acessa), com contexto e suporte a imagem do models.dev.
+
+   Os modelos marcados entram em `customModels` do `~/.factory/settings.json` e
+   aparecem no seletor de modelos do Droid, mesmo fora de um fallback. Modelos que
+   você cadastrou à mão continuam intocados; o droid-tier só remove os que ele
+   mesmo cadastrou. Antes da primeira alteração, o settings é copiado para
+   `settings.json.droid-tier.bak`.
+
+2. **Fallbacks**: para cada fallback, escolha de onde vêm os modelos (pool Standard
+   ou Droid Core da Factory, ou um provider cadastrado) e o modelo e esforço de
+   cada papel. `k`/`j` reordenam.
 
 ## Configuração
 
@@ -124,10 +147,10 @@ o `droid-tier` não altera nada.
 ## Próximos passos
 
 - [x] Perfis e providers em arquivo de configuração, fora do código
-- [ ] Assistente para cadastrar providers de fallback (OpenCode Go, OpenRouter, Z.AI...) como `customModels`
+- [x] Interface para cadastrar providers, escolher modelos e montar fallbacks
 - [ ] Windows: Tarefa Agendada no lugar do timer do systemd
-- [ ] Interface (TUI ou web local) para ver limites e editar perfis
-- [x] Testes com respostas de exemplo da API (`python -m unittest discover -s tests`)
+- [ ] Ver limites e degrau atual na interface
+- [x] Testes com respostas de exemplo da API (`pytest`)
 
 ## Licença
 
