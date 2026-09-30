@@ -85,20 +85,28 @@ def desktop(title, message):
 _PS_APP_ID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
 
 
-def _windows_toast(title, message):
-    def ps_str(s):
-        return "'" + s.replace("'", "''") + "'"
+def _ps_str(s):
+    # Single-quoted literal: doubling ' is the ONLY guard here. Title/message
+    # come from the user's config and API errors — never build this script with
+    # double quotes or interpolate the text outside _ps_str.
+    return "'" + s.replace("'", "''") + "'"
 
-    script = f"""
+
+def _toast_script(title, message):
+    return f"""
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
 $t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
 $x = $t.GetElementsByTagName('text')
-$x.Item(0).AppendChild($t.CreateTextNode({ps_str(title)})) > $null
-$x.Item(1).AppendChild($t.CreateTextNode({ps_str(message)})) > $null
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier({ps_str(_PS_APP_ID)}).Show(
+$x.Item(0).AppendChild($t.CreateTextNode({_ps_str(title)})) > $null
+$x.Item(1).AppendChild($t.CreateTextNode({_ps_str(message)})) > $null
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier({_ps_str(_PS_APP_ID)}).Show(
     [Windows.UI.Notifications.ToastNotification]::new($t))
 """
+
+
+def _windows_toast(title, message):
     # CREATE_NO_WINDOW: otherwise PowerShell flashes a console when called from the task's pythonw.
-    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                    _toast_script(title, message)],
                    check=True, timeout=20, capture_output=True,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

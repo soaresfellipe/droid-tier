@@ -67,6 +67,15 @@ class ChannelsTest(unittest.TestCase):
             notify.validate({"webhook": "http://example.com/hook"})
 
 
+class ToastTest(unittest.TestCase):
+    def test_toast_script_escapes_injection(self):
+        # A tier name or API error could carry quotes; they must stay text.
+        evil = "x'); Start-Process 'calc'; ac ~\\evil ('"
+        script = notify._toast_script(evil, "m")
+        self.assertIn("'" + evil.replace("'", "''") + "'", script)
+        self.assertNotIn("'" + evil + "'", script)
+
+
 class RunNotifiesTest(Base):
     def setUp(self):
         super().setUp()
