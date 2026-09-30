@@ -35,7 +35,11 @@ def cmd_setup(_):
 def cmd_init(_):
     if os.path.exists(CONFIG_FILE):
         sys.exit(f"{CONFIG_FILE} already exists; not overwriting it")
-    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+    folder = os.path.dirname(CONFIG_FILE)
+    existed = os.path.exists(folder)
+    os.makedirs(folder, exist_ok=True)
+    if not existed and os.name == "posix":
+        os.chmod(folder, 0o700)  # the folder holds factory-api-key.env
     with open(CONFIG_FILE, "w", encoding="utf-8", newline="\n") as f:
         f.write(EXAMPLE_CONFIG)
     print(f"created {CONFIG_FILE}; adjust the fallbacks and run `droid-tier check`")
