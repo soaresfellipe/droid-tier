@@ -751,9 +751,34 @@ class FallbackEditScreen(Screen):
             sel.set_options(options_role)
             if model:
                 sel.value = model
-            esel = self.query_one(f"#e-{role}", Select)
-            if effort and esel.value is Select.NULL:
-                esel.value = effort
+            self.update_efforts(role, wanted=effort or None)
+
+    def allowed_efforts(self, model):
+        """Esforcos que o Droid aceita para o modelo, conforme a origem escolhida."""
+        st = self.app.state
+        natives = st.natives or []
+        source = self.query_one("#source", Select).value
+        entry = None
+        if isinstance(source, str) and source.startswith("provider:"):
+            base = (st.providers().get(source[9:]) or {}).get("base_url", "")
+            entry = next((e for e in catalog.provider_entries(st.settings, base) if e.get("model") == model), None)
+        return catalog.efforts_for(model, natives, entry) or list(catalog.EFFORTS)
+
+    def update_efforts(self, role, wanted=None):
+        model = self.query_one(f"#m-{role}", Select).value
+        esel = self.query_one(f"#e-{role}", Select)
+        current = wanted or (esel.value if isinstance(esel.value, str) else None)
+        allowed = self.allowed_efforts(model) if isinstance(model, str) else list(catalog.EFFORTS)
+        esel.set_options([(e, e) for e in allowed])
+        if current in allowed:
+            esel.value = current
+        elif current:
+            self.notify(f"{ROLE_LABELS[role]}: {model} não aceita esforço {current} "
+                        f"(aceita: {', '.join(allowed)})", severity="warning")
+
+    @on(Select.Changed, ".role-model")
+    def model_changed(self, event):
+        self.update_efforts(event.select.id[2:])
 
     @on(Input.Submitted, "#extra")
     def add_extra(self, event):

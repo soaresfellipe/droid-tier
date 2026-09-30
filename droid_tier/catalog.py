@@ -58,6 +58,7 @@ class Model:
     output: int | None = None
     image: bool | None = None
     live: bool | None = None  # True: veio do /models do provider
+    reasoning: bool | None = None
 
     @property
     def label(self):
@@ -69,6 +70,7 @@ class NativeModel:
     id: str
     name: str
     deprecated: bool = False
+    efforts: list = field(default_factory=list)  # vazio = desconhecido
     pool: str = field(init=False)
 
     def __post_init__(self):
@@ -121,7 +123,7 @@ def md_models(md, provider_id):
         limit = m.get("limit") or {}
         inputs = (m.get("modalities") or {}).get("input") or []
         out[mid] = Model(mid, m.get("name") or mid, limit.get("context"), limit.get("output"),
-                         "image" in inputs if inputs else m.get("attachment"))
+                         "image" in inputs if inputs else m.get("attachment"), reasoning=m.get("reasoning"))
     return out
 
 
@@ -179,22 +181,51 @@ def native_models(droid_bin=None):
 
 
 def parse_native_models(help_text):
-    models, inside = [], False
+    models, section = [], None
+    efforts = {}  # nome de exibicao -> esforcos, do bloco "Model details"
     for line in help_text.splitlines():
-        if line.strip() == "Available Models:":
-            inside = True
+        stripped = line.strip()
+        if stripped in ("Available Models:", "Model details:", "Custom Models:"):
+            section = stripped
             continue
-        if inside:
+        if section == "Available Models:":
             m = re.match(r"^\s{2,}([a-z0-9][a-z0-9.\-]*)\s{2,}(.+?)\s*$", line)
             if not m:
                 if models:
-                    break
+                    section = None
                 continue
             name = m.group(2)
             deprecated = "[Deprecated]" in name
             name = name.replace("[Deprecated]", "").replace("(default)", "").strip()
             models.append(NativeModel(m.group(1), name, deprecated))
+        elif section == "Model details:":
+            m = re.match(r"^\s*-\s*(.+?):\s*supports reasoning:.*?supported:\s*\[([^\]]*)\]", line)
+            if m:
+                efforts[m.group(1).strip()] = [e.strip() for e in m.group(2).split(",") if e.strip()]
+    for model in models:
+        model.efforts = efforts.get(model.name, [])
     return models
+
+
+# Sem modelo nativo equivalente, o Droid aceita estes esforcos num customModel
+# que tenha reasoningEffort; sem reasoningEffort, o raciocinio fica desligado.
+CUSTOM_EFFORTS = ["off", "low", "medium", "high"]
+
+
+def efforts_for(model_id, natives, entry=None):
+    """Esforcos que o Droid aceita para um modelo; None = desconhecido (oferecer todos)."""
+    native = next((n for n in natives if n.id == model_id), None)
+    if entry is not None:
+        base = entry.get("baseModelId") or entry.get("model")
+        native = next((n for n in natives if n.id == base), None)
+        if native is None:
+            configured = entry.get("reasoningEffort")
+            if not configured or configured == "none":
+                return ["none"]
+            return CUSTOM_EFFORTS + ([configured] if configured not in CUSTOM_EFFORTS else [])
+    if native is not None and native.efforts:
+        return native.efforts
+    return None
 
 
 # ---------------------------------------------------------------- customModels
@@ -218,6 +249,10 @@ def custom_entry(provider, model, api_key, prefix):
         entry["maxOutputTokens"] = int(model.output)
     if model.image is not None:
         entry["noImageSupport"] = not model.image
+    if model.reasoning:
+        # Sem isso, um modelo que nao tem o mesmo nome de um nativo da Factory
+        # (ex.: z-ai/glm-5.3 no OpenRouter) roda com o raciocinio desligado.
+        entry["reasoningEffort"] = "high"
     headers = EXTRA_HEADERS.get(provider.id)
     if headers:
         entry["extraHeaders"] = headers(model.id)
@@ -249,6 +284,8 @@ def sync_custom_models(settings, provider, selected, api_key, prefix, managed):
         same = core.norm_url(entry.get("baseUrl")) == base
         if same and entry.get("model") in wanted:
             entry["apiKey"] = api_key
+            if wanted[entry["model"]].reasoning and "reasoningEffort" not in entry:
+                entry["reasoningEffort"] = "high"
             kept.append(entry)
             wanted.pop(entry["model"])
         elif same and entry.get("model") in managed:

@@ -1,9 +1,11 @@
 import copy
+import io
 import datetime as dt
 import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 import droid_tier.core as m
 
@@ -230,6 +232,39 @@ class WriteRetryTest(Base):
             m.write_settings(self.settings_path, {"ok": True})
         leftovers = [f for f in os.listdir(self.dir.name) if f.startswith(".settings.droid-tier.")]
         self.assertEqual(leftovers, [])
+
+
+
+
+class ValidateLimitsTest(unittest.TestCase):
+    def test_accepts_real_shape(self):
+        data = {"limits": {"standard": {"fiveHour": {"usedPercent": 0}, "weekly": bucket(100)},
+                           "core": {"weekly": bucket(40)}}, "overagePreference": None}
+        self.assertEqual(m.validate_limits(data)["standard"]["weekly"]["usedPercent"], 100)
+        # conta sem Droid Core
+        m.validate_limits({"limits": {"standard": {"weekly": bucket(10)}}})
+
+    def test_rejects_shapes_that_would_look_like_free_limits(self):
+        for data in ({}, {"limits": None}, {"limits": {}}, {"limits": {"standard": {}}},
+                     {"limits": {"standard": {"weekly": {"used": 100}}}},
+                     {"limits": {"standard": {"weekly": bucket(1)}, "core": "x"}}, []):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                m.validate_limits(data)
+
+    def test_run_keeps_settings_when_api_changes(self):
+        base = Base("setUp")
+        base.setUp()
+        try:
+            cfg = base.example()
+            before = open(base.settings_path).read()
+            with mock.patch.object(m.urllib.request, "urlopen") as op, \
+                    mock.patch.object(m, "api_key", return_value="k"), mock.patch.object(m, "ECHO", False):
+                op.return_value.__enter__.return_value = io.BytesIO(b'{"limits": {}}')
+                with self.assertRaises(m.LimitsError):
+                    m.run(cfg)
+            self.assertEqual(open(base.settings_path).read(), before)
+        finally:
+            base.doCleanups()
 
 
 if __name__ == "__main__":

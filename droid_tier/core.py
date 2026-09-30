@@ -99,6 +99,12 @@ subagent_heavy = "glm-5.3-flash@max"
 orchestrator = "glm-5.3@low"
 worker = "glm-5.3-flash@high"
 validator = "deepseek-v4.1-flash@high"
+
+# Avisos quando o degrau muda ou a API da Factory para de responder.
+# [notify]
+# desktop = true                          # toast no Windows, notify-send no Linux
+# ntfy = "https://ntfy.sh/seu-topico"     # notificacao no celular pelo app ntfy
+# webhook = "https://exemplo/webhook"     # POST JSON (n8n, Slack via proxy...)
 '''
 
 
@@ -166,7 +172,13 @@ def load_config(path=None):
         "home_pool": home_pool,
         "providers": providers,
         "fallbacks": fallbacks,
+        "notify": _validate_notify(cfg.get("notify")),
     }
+
+
+def _validate_notify(section):
+    from . import notify  # notify importa core
+    return notify.validate(section)
 
 
 def norm_url(u):
@@ -241,7 +253,26 @@ def fetch_limits(cfg):
         "User-Agent": "droid-tier",
     })
     with urllib.request.urlopen(req, timeout=20) as r:
-        return json.load(r).get("limits") or {}
+        return validate_limits(json.load(r))
+
+
+def validate_limits(data):
+    """Recusa resposta fora do formato esperado.
+
+    Sem isso, uma mudanca no endpoint (nao documentado) viraria "nenhum limite
+    estourado" e o droid-tier restauraria padroes que estao sem limite. O proprio
+    Droid trata limits.standard ausente como falha."""
+    limits = data.get("limits") if isinstance(data, dict) else None
+    if not isinstance(limits, dict):
+        raise ValueError("resposta sem `limits`; o formato da API da Factory mudou?")
+    for pool in POOLS:
+        p = limits.get(pool)
+        if p is None and pool == "core":
+            continue  # conta sem Droid Core
+        if not isinstance(p, dict) or not any(
+                isinstance((p.get(w) or {}).get("usedPercent"), (int, float)) for w in WINDOWS):
+            raise ValueError(f"resposta sem `limits.{pool}` com usedPercent; o formato da API da Factory mudou?")
+    return limits
 
 
 def pool_hits(pool, threshold, now=None):
@@ -485,12 +516,23 @@ def run(cfg):
     """Aplica o degrau que os limites indicam. Devolve a mensagem do log, ou None se nada mudou."""
     d = Droid(cfg)
     before = d.current()
+    from . import notify
     try:
         st = status(cfg)
     except LimitsError as e:
         # Sem resposta confiavel, nao mexe: melhor ficar no degrau atual do que chutar.
         log(f"falha ao consultar limites: {e}; mantendo {before}")
+        if not os.path.exists(api_error_file()):  # avisa so quando comeca, nao a cada rodada
+            os.makedirs(STATE_DIR, exist_ok=True)
+            open(api_error_file(), "w").close()
+            notify.send(cfg, "droid-tier: sem acesso aos limites",
+                        f"A API da Factory falhou ({e}). O Droid fica em {before} até ela voltar.",
+                        {"event": "api_error", "tier": before})
         raise
+    if os.path.exists(api_error_file()):
+        os.remove(api_error_file())
+        notify.send(cfg, "droid-tier: limites de volta", "A API da Factory voltou a responder.",
+                    {"event": "api_ok", "tier": before})
     if st["pin"]:
         return None
     tier, hits = st["tier"], st["hits"]
@@ -499,4 +541,15 @@ def run(cfg):
     why = "; ".join(f"{p} {', '.join(h)}" for p, h in hits.items() if h)
     msg = f"{before} -> {tier} ({'limites liberados' if tier == HOME_TIER else why})"
     log(msg)
+    if tier == HOME_TIER:
+        text = "Limites liberados. O Droid voltou para os seus padrões."
+    else:
+        text = f"Limite da Factory: {why}. Sessões novas do Droid usam o fallback {tier}."
+    notify.send(cfg, f"droid-tier: {before} → {tier}", text,
+                {"event": "tier_changed", "from": before, "to": tier, "reason": why})
     return msg
+
+
+def api_error_file():
+    # Calculado na hora: STATE_DIR pode ser trocado (XDG, testes).
+    return os.path.join(STATE_DIR, "api-error")

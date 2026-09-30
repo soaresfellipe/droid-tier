@@ -15,7 +15,7 @@ Uso:
 import os
 import sys
 
-from . import core
+from . import catalog, core
 from .core import CONFIG_FILE, EXAMPLE_CONFIG, HOME_FILE, ConfigError, Droid, describe, home_pool, load_config
 
 
@@ -41,14 +41,21 @@ def cmd_init(_):
     print(f"criado {CONFIG_FILE}; ajuste os fallbacks e rode `droid-tier check`")
 
 
-def print_profile(profile):
+def print_profile(profile, settings=None, natives=()):
+    customs = {m.get("id"): m for m in (settings or {}).get("customModels") or []}
     for role, (model, effort) in profile.items():
-        print(f"  {role:16} {model or '-'}" + (f" @{effort}" if effort else ""))
+        note = ""
+        if effort and settings is not None:
+            allowed = catalog.efforts_for(model, natives, customs.get(model)) if model else None
+            if allowed and effort not in allowed:
+                note = f"   <- o Droid nao aceita {effort} aqui (aceita: {', '.join(allowed)})"
+        print(f"  {role:16} {model or '-'}" + (f" @{effort}" if effort else "") + note)
 
 
 def cmd_check(_):
     cfg = load_config()
     d = Droid(cfg)
+    natives = catalog.native_models()
     hp = home_pool(cfg, d.home)
     origin = "guardados em " + HOME_FILE if d.saved_home else "no settings.json"
     print(f"home: seus padroes, {origin} (pool {hp or 'nenhum'})")
@@ -56,7 +63,7 @@ def cmd_check(_):
     for fb in cfg["fallbacks"]:
         origin = f"pool {fb['pool']}" if fb.get("pool") else f"provider {fb.get('provider') or '(nenhum)'}"
         print(f"{fb['name']} ({origin})")
-        print_profile(d.fallbacks[fb["name"]])
+        print_profile(d.fallbacks[fb["name"]], d.s, natives)
     if cfg["fallbacks"][-1].get("pool"):
         print(f"aviso: o ultimo fallback depende do pool {cfg['fallbacks'][-1]['pool']}; "
               "sem um fallback sem pool, ele fica mesmo estourado")

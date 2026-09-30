@@ -46,6 +46,48 @@ class NativeTest(unittest.TestCase):
         self.assertEqual([m.pool for m in models], ["standard", "standard", "core", "core"])
 
 
+class EffortsTest(unittest.TestCase):
+    HELP = HELP.replace("  - Opus 5.5: supports reasoning", """\
+  - Opus 5.5: supports reasoning: Yes; supported: [low, medium, high, xhigh, max]; default: medium
+  - GLM-5.3-Flash: supports reasoning: Yes; supported: [low, high, max]; default: high
+  - GPT-6 Sol: supports reasoning: No""")
+
+    def natives(self):
+        return catalog.parse_native_models(self.HELP)
+
+    def test_parse_efforts(self):
+        by_id = {n.id: n for n in self.natives()}
+        self.assertEqual(by_id["claude-opus-5-5"].efforts, ["low", "medium", "high", "xhigh", "max"])
+        self.assertEqual(by_id["glm-5.3-flash"].efforts, ["low", "high", "max"])
+        self.assertEqual(by_id["gpt-6-sol"].efforts, [])
+
+    def test_rules(self):
+        n = self.natives()
+        self.assertEqual(catalog.efforts_for("glm-5.3-flash", n), ["low", "high", "max"])
+        self.assertIsNone(catalog.efforts_for("desconhecido", n))
+        # custom com o mesmo nome de um nativo herda os esforcos dele
+        self.assertEqual(catalog.efforts_for("glm-5.3-flash", n, {"model": "glm-5.3-flash"}), ["low", "high", "max"])
+        # custom sem nativo e sem reasoningEffort: raciocinio desligado
+        self.assertEqual(catalog.efforts_for("z-ai/glm-5.3", n, {"model": "z-ai/glm-5.3"}), ["none"])
+        self.assertEqual(catalog.efforts_for("z-ai/glm-5.3", n, {"model": "z-ai/glm-5.3", "reasoningEffort": "high"}),
+                         ["off", "low", "medium", "high"])
+        self.assertEqual(catalog.efforts_for("x", n, {"model": "x", "reasoningEffort": "max"}),
+                         ["off", "low", "medium", "high", "max"])
+        self.assertEqual(catalog.efforts_for("x", n, {"model": "x", "baseModelId": "glm-5.3-flash"}),
+                         ["low", "high", "max"])
+
+    def test_entries_get_reasoning_effort(self):
+        md = {"p": {"api": "https://p/v1", "models": {"z-ai/glm-5.3": {"name": "GLM", "reasoning": True},
+                                                      "plain": {"name": "Plain", "reasoning": False}}}}
+        prov = catalog.Provider("p", "P", "https://p/v1")
+        meta = catalog.md_models(md, "p")
+        s = {"customModels": [{"model": "z-ai/glm-5.3", "id": "custom:GLM-0", "baseUrl": "https://p/v1"}]}
+        catalog.sync_custom_models(s, prov, [meta["z-ai/glm-5.3"], meta["plain"]], "k", "P", set())
+        by = {e["model"]: e for e in s["customModels"]}
+        self.assertEqual(by["z-ai/glm-5.3"]["reasoningEffort"], "high")  # existente ganhou
+        self.assertNotIn("reasoningEffort", by["plain"])
+
+
 class CatalogTest(unittest.TestCase):
     def test_providers(self):
         ps = {p.id: p for p in catalog.providers(MD)}
