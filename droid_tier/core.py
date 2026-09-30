@@ -334,8 +334,13 @@ def pool_hits(pool, threshold, now=None, names=WINDOWS):
         if pct is None or pct < threshold:
             continue
         end = b.get("windowEnd")
-        if end and dt.datetime.fromisoformat(end.replace("Z", "+00:00")) <= now:
-            continue  # the window already reset; the number is stale
+        if end:
+            try:
+                if dt.datetime.fromisoformat(end.replace("Z", "+00:00")) <= now:
+                    continue  # the window already reset; the number is stale
+            except ValueError:
+                pass  # malformed end: count the window anyway; assuming "reset"
+                # could restore defaults that are out of quota
         hits.append(f"{name} {pct:.0f}%")
     return hits
 
