@@ -8,11 +8,13 @@ A Factory tem dois pools de uso, cada um com janelas de 5h, 7 dias e mensal:
 - **Standard**: modelos Anthropic, OpenAI e Google
 - **Droid Core**: modelos open source (GLM, DeepSeek, MiniMax...)
 
-Quando um pool passa do limiar, o `droid-tier` reescreve os campos de modelo do
-`~/.factory/settings.json` para o próximo degrau. Quando a janela vira, ele volta sozinho.
+Os seus padrões do Droid ficam como estão. Quando o pool que eles consomem passa
+do limiar, o `droid-tier` guarda uma cópia desses padrões e troca os modelos do
+`~/.factory/settings.json` para o primeiro fallback com folga. Quando a janela vira,
+ele restaura exatamente o que estava lá.
 
 ```
-standard  ->  droid (Core)  ->  fallback (customModels: OpenCode Go, OpenRouter, ...)
+seus padrões  ->  Droid Core (GLM, DeepSeek...)  ->  provider externo (OpenCode Go, OpenRouter...)
 ```
 
 ## Instalação (Linux)
@@ -22,7 +24,7 @@ Requer Python 3.11+ (sem dependências).
 ```sh
 install -m 755 droid-tier ~/.local/bin/droid-tier
 droid-tier init            # cria ~/.config/droid-tier/config.toml
-droid-tier check           # valida o config contra o settings.json do Droid
+droid-tier check           # mostra seus padrões e os fallbacks resolvidos
 ```
 
 Crie uma API key da Factory em app.factory.ai/settings/api-keys e grave em
@@ -43,9 +45,7 @@ systemctl --user enable --now droid-tier.timer
 
 ## Configuração
 
-Os degraus ficam em `config.toml`, em ordem de preferência. Vale o primeiro cujo
-pool da Factory ainda tem folga; um degrau sem `pool` (provider de fallback) está
-sempre disponível.
+`config.toml` descreve só os fallbacks, em ordem. Seus padrões nunca entram nele.
 
 ```toml
 threshold = 95
@@ -53,29 +53,46 @@ threshold = 95
 [providers.opencode-go]
 base_url = "https://opencode.ai/zen/go/v1"
 
-[[tier]]
+[[fallback]]
 name = "droid"
 pool = "core"
 session = "glm-5.3-flash@high"
 spec = "glm-5.3@high"
 
-[[tier]]
+[[fallback]]
 name = "oc"
 provider = "opencode-go"
 session = "glm-5.3-flash@high"
 spec = "glm-5.3@high"
 ```
 
+Vale o primeiro fallback cujo pool ainda tem folga; um fallback sem `pool` está
+sempre disponível, então deixe-o por último.
+
 Papéis: `session`, `spec`, `subagent_light`, `subagent_medium`, `subagent_heavy`,
 `orchestrator`, `worker`, `validator`. Papel omitido não é alterado. O formato é
 `modelo` ou `modelo@esforço`.
 
-Num degrau com `provider`, o modelo é procurado em `customModels` do
+Num fallback com `provider`, o modelo é procurado em `customModels` do
 `~/.factory/settings.json` pelo par `model` + `baseUrl`. Assim o config não depende
 do ID `custom:...-N` que o Droid gera a partir da posição na lista.
 
-Outras chaves de topo (antes de qualquer tabela): `settings` (caminho do
-settings.json do Droid) e `factory_api` (padrão `https://app.factory.ai`).
+Chaves de topo opcionais (antes de qualquer tabela):
+
+- `home_pool`: pool que seus padrões consomem (`standard`, `core` ou `none`). Sem
+  ela, é deduzido pelos modelos: Claude/GPT/Gemini contam como Standard;
+  GLM/DeepSeek/Kimi/MiniMax/Qwen/Nemotron como Core; `custom:` não consome pool.
+- `settings`: caminho do settings.json do Droid.
+- `factory_api`: padrão `https://app.factory.ai`.
+
+### Seus padrões
+
+Na primeira troca, os 8 pares modelo/esforço atuais vão para
+`~/.local/state/droid-tier/home.json`. Enquanto esse arquivo existir, o Droid está
+num fallback. Na volta, o settings é restaurado e o arquivo apagado.
+
+Mudanças que você fizer nos modelos enquanto estiver num fallback se perdem na
+volta. Para mudar seus padrões nesse período, edite o `home.json`.
 
 ## Comandos
 
@@ -84,11 +101,19 @@ droid-tier init          cria o config.toml de exemplo
 droid-tier check         valida o config, sem rede
 droid-tier status        mostra limites e degrau, não altera nada
 droid-tier run           consulta e aplica (usado pelo timer)
-droid-tier pin <degrau>  fixa um degrau
+droid-tier pin <degrau>  fixa um degrau ("home" = seus padrões)
 droid-tier unpin         devolve o controle ao timer
+droid-tier restore       restaura seus padrões agora e solta o pin
 ```
 
 O histórico de trocas fica em `~/.local/state/droid-tier/log`.
+
+## Desinstalar
+
+```sh
+systemctl --user disable --now droid-tier.timer
+droid-tier restore
+```
 
 ## Aviso
 

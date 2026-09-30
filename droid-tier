@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """droid-tier: troca os modelos do Droid conforme os limites da Factory.
 
-Os degraus ficam em ~/.config/droid-tier/config.toml, em ordem de preferencia.
-Vale o primeiro cujo pool da Factory ainda tem folga; um degrau sem pool
-(um provider de fallback) esta sempre disponivel.
+Os seus padroes do Droid ficam como estao. Quando o pool que eles usam passa do
+limiar, o droid-tier guarda esses padroes, aplica o primeiro fallback com folga
+(de ~/.config/droid-tier/config.toml) e, quando o limite libera, restaura tudo.
 
 Uso:
   droid-tier init          cria o config.toml de exemplo
   droid-tier check         valida o config contra o settings.json do Droid, sem rede
   droid-tier status        mostra limites e degrau, nao altera nada
   droid-tier run           consulta limites e aplica o degrau (usado pelo timer)
-  droid-tier pin <degrau>  aplica e fixa um degrau; o timer para de trocar
+  droid-tier pin <degrau>  aplica e fixa um degrau ("home" = seus padroes)
   droid-tier unpin         devolve o controle ao timer
+  droid-tier restore       restaura seus padroes agora e solta o pin
 """
 import datetime as dt
 import json
@@ -28,12 +29,16 @@ CONFIG_FILE = os.environ.get("DROID_TIER_CONFIG") or os.path.join(CONFIG_DIR, "c
 KEY_FILE = os.path.join(CONFIG_DIR, "factory-api-key.env")
 STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local", "state"), "droid-tier")
 PIN_FILE = os.path.join(STATE_DIR, "pin")
+HOME_FILE = os.path.join(STATE_DIR, "home.json")
 LOG_FILE = os.path.join(STATE_DIR, "log")
 DEFAULT_SETTINGS = os.path.join(HOME, ".factory", "settings.json")
 DEFAULT_API = "https://app.factory.ai"
 
+HOME_TIER = "home"
 POOLS = ("standard", "core")
 WINDOWS = ("fiveHour", "weekly", "monthly")
+# Prefixos dos modelos nativos que a Factory cobra no pool Droid Core.
+CORE_PREFIXES = ("glm-", "deepseek-", "kimi-", "minimax-", "qwen", "nemotron-")
 
 # papel no config.toml -> (secao do settings.json, campo do modelo, campo do esforco)
 ROLES = {
@@ -48,35 +53,31 @@ ROLES = {
 }
 
 EXAMPLE_CONFIG = '''\
-# droid-tier: degraus em ordem de preferencia.
-# Vale o primeiro cujo pool da Factory ainda tem folga. Um degrau sem `pool`
-# (provider de fallback) esta sempre disponivel, entao deixe-o por ultimo.
+# droid-tier: fallbacks para quando os limites da Factory acabam.
+#
+# Os seus padroes do Droid (o que estiver no settings.json) nao entram aqui.
+# Ao sair deles, o droid-tier guarda uma copia e restaura quando o limite libera.
 
-# Troca de degrau quando qualquer janela (5h, semanal, mensal) passa deste %.
+# Troca quando qualquer janela (5h, semanal, mensal) passa deste %.
 threshold = 95
+
+# Pool que os seus padroes consomem: "standard", "core" ou "none".
+# Sem esta linha, e deduzido pelos modelos (Claude/GPT/Gemini = standard,
+# GLM/DeepSeek/Kimi/MiniMax/Qwen/Nemotron = core, custom: = none).
+# home_pool = "standard"
 
 # Providers de fallback. Cada modelo usado com `provider = "..."` precisa existir
 # em customModels no ~/.factory/settings.json com este baseUrl.
 [providers.opencode-go]
 base_url = "https://opencode.ai/zen/go/v1"
 
+# Fallbacks em ordem. Vale o primeiro com folga; um fallback sem `pool` esta
+# sempre disponivel, entao deixe-o por ultimo.
 # Papeis: session, spec, subagent_light, subagent_medium, subagent_heavy,
-# orchestrator, worker, validator. Papel omitido fica como esta no settings.
+# orchestrator, worker, validator. Papel omitido fica como esta.
 # Formato: "modelo" ou "modelo@esforco".
 
-[[tier]]
-name = "standard"
-pool = "standard"   # modelos Anthropic / OpenAI / Google
-session = "gpt-6-luna@high"
-spec = "claude-opus-5-5@high"
-subagent_light = "gpt-6-luna@medium"
-subagent_medium = "gpt-6-luna@high"
-subagent_heavy = "claude-sonnet-5-5@high"
-orchestrator = "claude-opus-5-5@low"
-worker = "claude-sonnet-5-5@medium"
-validator = "gpt-6-luna@high"
-
-[[tier]]
+[[fallback]]
 name = "droid"
 pool = "core"       # modelos open source da Factory (Droid Core)
 session = "glm-5.3-flash@high"
@@ -88,9 +89,9 @@ orchestrator = "glm-5.3@low"
 worker = "glm-5.3-flash@high"
 validator = "deepseek-v4.1-flash@high"
 
-[[tier]]
+[[fallback]]
 name = "oc"
-provider = "opencode-go"   # mesmos modelos, via customModels
+provider = "opencode-go"   # os mesmos modelos, via customModels
 session = "glm-5.3-flash@high"
 spec = "glm-5.3@high"
 subagent_light = "glm-5.3-flash@low"
@@ -126,29 +127,32 @@ def load_config(path=None):
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}")
 
-    tiers = cfg.get("tier") or []
-    if not tiers:
-        raise ConfigError("nenhum [[tier]] definido")
+    fallbacks = cfg.get("fallback") or []
+    if not fallbacks:
+        raise ConfigError("nenhum [[fallback]] definido")
     providers = cfg.get("providers") or {}
-    seen = set()
-    for i, t in enumerate(tiers, 1):
+    home_pool = cfg.get("home_pool")
+    if home_pool not in (None, "none", *POOLS):
+        raise ConfigError("home_pool deve ser standard, core ou none")
+    seen = {HOME_TIER}
+    for i, t in enumerate(fallbacks, 1):
         name = t.get("name")
         if not name:
-            raise ConfigError(f"[[tier]] #{i} sem name")
+            raise ConfigError(f"[[fallback]] #{i} sem name")
         if name in seen:
-            raise ConfigError(f"degrau {name!r} repetido")
+            raise ConfigError(f"fallback {name!r} repetido ou reservado")
         seen.add(name)
         if t.get("pool") not in (None, *POOLS):
-            raise ConfigError(f"degrau {name!r}: pool deve ser {' ou '.join(POOLS)}")
+            raise ConfigError(f"fallback {name!r}: pool deve ser {' ou '.join(POOLS)}")
         if t.get("pool") and t.get("provider"):
-            raise ConfigError(f"degrau {name!r}: use pool (Factory) ou provider (fallback), nao os dois")
+            raise ConfigError(f"fallback {name!r}: use pool (Factory) ou provider, nao os dois")
         if t.get("provider") and t["provider"] not in providers:
-            raise ConfigError(f"degrau {name!r}: provider {t['provider']!r} nao esta em [providers]")
+            raise ConfigError(f"fallback {name!r}: provider {t['provider']!r} nao esta em [providers]")
         unknown = set(t) - {"name", "pool", "provider", *ROLES}
         if unknown:
-            raise ConfigError(f"degrau {name!r}: campos desconhecidos {sorted(unknown)}")
+            raise ConfigError(f"fallback {name!r}: campos desconhecidos {sorted(unknown)}")
         if not set(t) & set(ROLES):
-            raise ConfigError(f"degrau {name!r} nao define nenhum papel")
+            raise ConfigError(f"fallback {name!r} nao define nenhum papel")
     for pname, p in providers.items():
         if not p.get("base_url"):
             raise ConfigError(f"provider {pname!r} sem base_url")
@@ -156,8 +160,9 @@ def load_config(path=None):
         "threshold": float(cfg.get("threshold", 95)),
         "settings": os.path.expanduser(cfg.get("settings", DEFAULT_SETTINGS)),
         "api": cfg.get("factory_api", DEFAULT_API).rstrip("/"),
+        "home_pool": home_pool,
         "providers": providers,
-        "tiers": tiers,
+        "fallbacks": fallbacks,
     }
 
 
@@ -165,32 +170,48 @@ def norm_url(u):
     return (u or "").rstrip("/").lower()
 
 
-def resolve_tier(tier, cfg, settings):
-    """Degrau do config -> {papel: (id do modelo no Droid, esforco)}."""
-    provider = cfg["providers"].get(tier.get("provider")) if tier.get("provider") else None
+def resolve_fallback(fb, cfg, settings):
+    """Fallback do config -> {papel: (id do modelo no Droid, esforco ou None)}."""
+    provider = cfg["providers"].get(fb.get("provider")) if fb.get("provider") else None
     out = {}
     for role in ROLES:
-        spec = tier.get(role)
+        spec = fb.get(role)
         if spec is None:
             continue
         model, _, effort = spec.partition("@")
         if provider and not model.startswith("custom:"):
-            model = custom_model_id(settings, provider["base_url"], model, tier["name"])
+            model = custom_model_id(settings, provider["base_url"], model, fb["name"])
         out[role] = (model, effort or None)
     return out
 
 
-def custom_model_id(settings, base_url, model, tier_name):
-    matches = [m for m in settings.get("customModels") or []
-               if norm_url(m.get("baseUrl")) == norm_url(base_url) and m.get("model") == model]
-    if not matches:
-        raise ConfigError(f"degrau {tier_name!r}: nenhum customModel com model={model!r} "
+def custom_model_id(settings, base_url, model, name):
+    found = [m for m in settings.get("customModels") or []
+             if norm_url(m.get("baseUrl")) == norm_url(base_url) and m.get("model") == model]
+    if not found:
+        raise ConfigError(f"fallback {name!r}: nenhum customModel com model={model!r} "
                           f"e baseUrl={base_url!r} no settings.json do Droid")
-    return matches[0]["id"]
+    return found[0]["id"]
 
 
 def resolve_all(cfg, settings):
-    return {t["name"]: resolve_tier(t, cfg, settings) for t in cfg["tiers"]}
+    return {fb["name"]: resolve_fallback(fb, cfg, settings) for fb in cfg["fallbacks"]}
+
+
+def infer_pool(roles):
+    """Pool que um conjunto de papeis consome; None se so usa customModels."""
+    native = [m for m, _ in roles.values() if m and not m.startswith("custom:")]
+    if not native:
+        return None
+    if all(m.startswith(CORE_PREFIXES) for m in native):
+        return "core"
+    return "standard"
+
+
+def home_pool(cfg, home):
+    if cfg["home_pool"]:
+        return None if cfg["home_pool"] == "none" else cfg["home_pool"]
+    return infer_pool(home)
 
 
 # ---------------------------------------------------------------- limites
@@ -238,13 +259,16 @@ def pool_hits(pool, threshold, now=None):
     return hits
 
 
-def pick_tier(cfg, limits, now=None):
-    """Primeiro degrau com folga; se todos estourados, o ultimo. Devolve (nome, motivos)."""
+def pick_tier(cfg, limits, hpool, now=None):
+    """'home' se o pool dos padroes tem folga; senao o primeiro fallback com folga,
+    ou o ultimo se todos estourados. Devolve (nome, motivos)."""
     hits = {p: pool_hits(limits.get(p), cfg["threshold"], now) for p in POOLS}
-    for t in cfg["tiers"]:
-        if not t.get("pool") or not hits[t["pool"]]:
-            return t["name"], hits
-    return cfg["tiers"][-1]["name"], hits
+    if not hpool or not hits[hpool]:
+        return HOME_TIER, hits
+    for fb in cfg["fallbacks"]:
+        if not fb.get("pool") or not hits[fb["pool"]]:
+            return fb["name"], hits
+    return cfg["fallbacks"][-1]["name"], hits
 
 
 def describe(limits):
@@ -268,33 +292,7 @@ def load_settings(path):
         return json.load(f)
 
 
-def get_role(s, role):
-    section, mk, ek = ROLES[role]
-    d = s.get(section, {}) if section else s
-    return d.get(mk), d.get(ek)
-
-
-def matches(s, profile):
-    return all(get_role(s, role)[0] == model and (effort is None or get_role(s, role)[1] == effort)
-               for role, (model, effort) in profile.items())
-
-
-def current_tier(s, resolved):
-    for name, profile in resolved.items():
-        if matches(s, profile):
-            return name
-    return None  # misto / editado a mao
-
-
-def apply(path, s, profile):
-    if matches(s, profile):
-        return False
-    for role, (model, effort) in profile.items():
-        section, mk, ek = ROLES[role]
-        d = s.setdefault(section, {}) if section else s
-        d[mk] = model
-        if effort:
-            d[ek] = effort
+def write_settings(path, s):
     # Escrita atomica no mesmo diretorio, mantendo 0600 (o arquivo tem chaves de API).
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".settings.droid-tier.")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -302,8 +300,38 @@ def apply(path, s, profile):
         f.write("\n")
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
-    return True
 
+
+def get_role(s, role):
+    section, mk, ek = ROLES[role]
+    d = s.get(section, {}) if section else s
+    return d.get(mk), d.get(ek)
+
+
+def snapshot(s):
+    return {role: get_role(s, role) for role in ROLES}
+
+
+def matches(s, profile):
+    return all(get_role(s, role)[0] == model and (effort is None or get_role(s, role)[1] == effort)
+               for role, (model, effort) in profile.items())
+
+
+def set_roles(s, profile, exact=False):
+    """Grava os papeis. exact=True (restaurar padroes) tambem apaga o que nao existia."""
+    for role, (model, effort) in profile.items():
+        section, mk, ek = ROLES[role]
+        d = s.setdefault(section, {}) if section else s
+        for key, value in ((mk, model), (ek, effort)):
+            if value is not None:
+                d[key] = value
+            elif exact:
+                d.pop(key, None)
+        if exact and section and not d:
+            s.pop(section)  # secao criada por um fallback
+
+
+# ---------------------------------------------------------------- estado
 
 def read_pin():
     try:
@@ -311,6 +339,71 @@ def read_pin():
             return f.read().strip() or None
     except FileNotFoundError:
         return None
+
+
+def read_home():
+    """Padroes guardados ao sair deles; None quando o Droid esta nos padroes."""
+    try:
+        with open(HOME_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return {role: tuple(v) for role, v in data["roles"].items()}
+    except FileNotFoundError:
+        return None
+
+
+def save_home(roles):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(HOME_FILE, "w", encoding="utf-8") as f:
+        json.dump({"savedAt": dt.datetime.now().astimezone().isoformat(),
+                   "roles": {r: list(v) for r, v in roles.items()}}, f, indent=2)
+
+
+class Droid:
+    """Settings do Droid + fallbacks resolvidos + padroes guardados."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.s = load_settings(cfg["settings"])
+        self.fallbacks = resolve_all(cfg, self.s)
+        self.saved_home = read_home()
+        self.home = self.saved_home or snapshot(self.s)
+
+    def current(self):
+        if self.saved_home is None:
+            name = self.on_fallback()
+            return f"home (coincide com o fallback {name})" if name else HOME_TIER
+        return self.on_fallback() or "misto"
+
+    def on_fallback(self):
+        for name, profile in self.fallbacks.items():
+            if matches(self.s, profile):
+                return name
+        return None
+
+    def go(self, tier):
+        """Leva o settings ao degrau. Devolve True se escreveu."""
+        if tier == HOME_TIER:
+            if self.saved_home is None:
+                return False
+            set_roles(self.s, self.saved_home, exact=True)
+            write_settings(self.cfg["settings"], self.s)
+            os.remove(HOME_FILE)
+            self.saved_home = None
+            return True
+        profile = self.fallbacks[tier]
+        if self.saved_home is None:
+            if self.on_fallback():
+                # Sem copia dos padroes e o settings ja esta num fallback: guardar
+                # agora gravaria o fallback como se fosse o padrao da pessoa.
+                raise ConfigError("o settings ja esta num fallback e nao ha padroes guardados; "
+                                  "configure seus padroes no Droid ou grave home.json")
+            save_home(self.home)
+            self.saved_home = self.home
+        if matches(self.s, profile):
+            return False
+        set_roles(self.s, profile)
+        write_settings(self.cfg["settings"], self.s)
+        return True
 
 
 # ---------------------------------------------------------------- comandos
@@ -321,37 +414,42 @@ def cmd_init(_):
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8", newline="\n") as f:
         f.write(EXAMPLE_CONFIG)
-    print(f"criado {CONFIG_FILE}; ajuste os degraus e rode `droid-tier check`")
+    print(f"criado {CONFIG_FILE}; ajuste os fallbacks e rode `droid-tier check`")
+
+
+def print_profile(profile):
+    for role, (model, effort) in profile.items():
+        print(f"  {role:16} {model or '-'}" + (f" @{effort}" if effort else ""))
 
 
 def cmd_check(_):
     cfg = load_config()
-    s = load_settings(cfg["settings"])
-    resolved = resolve_all(cfg, s)
-    for t in cfg["tiers"]:
-        origin = f"pool {t['pool']}" if t.get("pool") else f"provider {t.get('provider') or '(nenhum)'}"
-        print(f"{t['name']} ({origin})")
-        for role, (model, effort) in resolved[t["name"]].items():
-            print(f"  {role:16} {model}" + (f" @{effort}" if effort else ""))
-    last = cfg["tiers"][-1]
-    if last.get("pool"):
-        print(f"aviso: o ultimo degrau ({last['name']}) depende do pool {last['pool']}; "
+    d = Droid(cfg)
+    hp = home_pool(cfg, d.home)
+    origin = "guardados em " + HOME_FILE if d.saved_home else "no settings.json"
+    print(f"home: seus padroes, {origin} (pool {hp or 'nenhum'})")
+    print_profile(d.home)
+    for fb in cfg["fallbacks"]:
+        origin = f"pool {fb['pool']}" if fb.get("pool") else f"provider {fb.get('provider') or '(nenhum)'}"
+        print(f"{fb['name']} ({origin})")
+        print_profile(d.fallbacks[fb["name"]])
+    if cfg["fallbacks"][-1].get("pool"):
+        print(f"aviso: o ultimo fallback depende do pool {cfg['fallbacks'][-1]['pool']}; "
               "sem um fallback sem pool, ele fica mesmo estourado")
-    print(f"degrau atual no settings: {current_tier(s, resolved) or 'misto'}")
+    print(f"degrau atual: {d.current()}")
 
 
 def cmd_pin(args):
     cfg = load_config()
-    names = [t["name"] for t in cfg["tiers"]]
+    names = [HOME_TIER] + [fb["name"] for fb in cfg["fallbacks"]]
     if not args or args[0] not in names:
         sys.exit(f"uso: droid-tier pin {{{'|'.join(names)}}}")
-    s = load_settings(cfg["settings"])
-    resolved = resolve_all(cfg, s)
-    before = current_tier(s, resolved) or "misto"
+    d = Droid(cfg)
+    before = d.current()
+    changed = d.go(args[0])
     os.makedirs(STATE_DIR, exist_ok=True)
     with open(PIN_FILE, "w", encoding="utf-8") as f:
         f.write(args[0] + "\n")
-    changed = apply(cfg["settings"], s, resolved[args[0]])
     log(f"pin {args[0]} (antes: {before})" + ("" if changed else ", nada a mudar"))
 
 
@@ -361,11 +459,19 @@ def cmd_unpin(_):
     log("unpin, o timer volta a decidir")
 
 
+def cmd_restore(_):
+    d = Droid(load_config())
+    before = d.current()
+    changed = d.go(HOME_TIER)
+    if os.path.exists(PIN_FILE):
+        os.remove(PIN_FILE)
+    log(f"restore: {before} -> home" if changed else "restore: ja nos padroes")
+
+
 def cmd_status_or_run(run):
     cfg = load_config()
-    s = load_settings(cfg["settings"])
-    resolved = resolve_all(cfg, s)
-    before = current_tier(s, resolved) or "misto"
+    d = Droid(cfg)
+    before = d.current()
     pin = read_pin()
     try:
         limits = fetch_limits(cfg)
@@ -374,17 +480,18 @@ def cmd_status_or_run(run):
         log(f"falha ao consultar limites: {e}; mantendo {before}")
         sys.exit(1)
 
-    tier, hits = pick_tier(cfg, limits)
+    hp = home_pool(cfg, d.home)
+    tier, hits = pick_tier(cfg, limits, hp)
     if not run:
         print(f"degrau atual: {before}" + (f" (fixado em {pin})" if pin else ""))
-        print(f"degrau pelos limites (limiar {cfg['threshold']:.0f}%): {tier}")
+        print(f"degrau pelos limites (limiar {cfg['threshold']:.0f}%, padroes no pool {hp or 'nenhum'}): {tier}")
         print(describe(limits))
         return
     if pin:
         return
-    if apply(cfg["settings"], s, resolved[tier]):
+    if d.go(tier):
         why = "; ".join(f"{p} {', '.join(h)}" for p, h in hits.items() if h)
-        log(f"{before} -> {tier}" + (f" ({why})" if why else " (limites liberados)"))
+        log(f"{before} -> {tier} ({'limites liberados' if tier == HOME_TIER else why})")
 
 
 COMMANDS = {
@@ -394,6 +501,7 @@ COMMANDS = {
     "run": lambda a: cmd_status_or_run(True),
     "pin": cmd_pin,
     "unpin": cmd_unpin,
+    "restore": cmd_restore,
 }
 
 
