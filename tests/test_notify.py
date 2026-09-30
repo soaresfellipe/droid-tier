@@ -33,12 +33,12 @@ class ChannelsTest(unittest.TestCase):
         self.url = f"http://127.0.0.1:{self.server.server_port}"
 
     def test_ntfy_and_webhook(self):
-        cfg = {"notify": {"ntfy": self.url + "/topico", "webhook": self.url + "/hook"}}
-        failed = notify.send(cfg, "droid-tier: home → oc", "Sessões novas usam oc.", {"event": "tier_changed"})
+        cfg = {"notify": {"ntfy": self.url + "/topic", "webhook": self.url + "/hook"}}
+        failed = notify.send(cfg, "droid-tier: home → oc", "New sessions use oc.", {"event": "tier_changed"})
         self.assertEqual(failed, [])
         by_path = {p: (h, b) for p, h, b in Capture.received}
-        headers, body = by_path["/topico"]
-        self.assertEqual(body.decode(), "Sessões novas usam oc.")
+        headers, body = by_path["/topic"]
+        self.assertEqual(body.decode(), "New sessions use oc.")
         encoded = headers["Title"]
         self.assertTrue(encoded.startswith("=?UTF-8?B?"))
         self.assertEqual(base64.b64decode(encoded[10:-2]).decode(), "droid-tier: home → oc")
@@ -46,14 +46,14 @@ class ChannelsTest(unittest.TestCase):
         self.assertEqual((payload["source"], payload["event"]), ("droid-tier", "tier_changed"))
 
     def test_failure_is_logged_not_raised(self):
-        cfg = {"notify": {"webhook": "http://127.0.0.1:9/nada"}}
+        cfg = {"notify": {"webhook": "http://127.0.0.1:9/nothing"}}
         with mock.patch.object(core, "log") as log:
             self.assertEqual(notify.send(cfg, "t", "m"), ["webhook"])
-        self.assertIn("webhook falhou", log.call_args[0][0])
+        self.assertIn("webhook notification failed", log.call_args[0][0])
 
     def test_validate(self):
         self.assertEqual(notify.validate(None), {})
-        for bad, msg in (({"email": "x"}, "desconhecidos"), ({"ntfy": "ntfy.sh/x"}, "URL"), ("x", "tabela")):
+        for bad, msg in (({"email": "x"}, "unknown fields"), ({"ntfy": "ntfy.sh/x"}, "URL"), ("x", "table")):
             with self.subTest(bad=bad), self.assertRaisesRegex(core.ConfigError, msg):
                 notify.validate(bad)
 
@@ -85,9 +85,9 @@ class RunNotifiesTest(Base):
 
         send = self.run_with({"standard": {"weekly": bucket(10)}})
         self.assertEqual(send.call_args[0][1], "droid-tier: droid → home")
-        self.assertIn("voltou para os seus padrões", send.call_args[0][2])
+        self.assertIn("back on your defaults", send.call_args[0][2])
 
-        # sem mudanca, sem aviso
+        # no change, no notification
         self.assertFalse(self.run_with({"standard": {"weekly": bucket(10)}}).called)
 
     def test_api_error_warns_once_and_on_recovery(self):

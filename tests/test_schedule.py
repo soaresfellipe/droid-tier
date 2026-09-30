@@ -11,7 +11,7 @@ NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
 class WindowsTaskTest(unittest.TestCase):
     def test_xml_is_valid_and_runs_hidden_on_battery(self):
         xml = schedule.task_xml(r"C:\Users\Ana & Bia\venv\Scripts\pythonw.exe", r"PC\ana")
-        root = ET.fromstring(xml.split("?>", 1)[1])  # ET nao aceita a declaracao UTF-16 em str
+        root = ET.fromstring(xml.split("?>", 1)[1])  # ET rejects the UTF-16 declaration in a str
         get = lambda path: root.find(path, NS).text  # noqa: E731
         self.assertEqual(get("t:Actions/t:Exec/t:Command"), r"C:\Users\Ana & Bia\venv\Scripts\pythonw.exe")
         self.assertEqual(get("t:Actions/t:Exec/t:Arguments"), "-m droid_tier run")
@@ -26,7 +26,7 @@ class WindowsTaskTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"USERDOMAIN": "PC", "USERNAME": "ana"}):
             self.assertEqual(schedule.current_user(), "PC\\ana")
 
-    @unittest.skipUnless(os.name == "nt", "so no Windows")
+    @unittest.skipUnless(os.name == "nt", "Windows only")
     def test_prefers_pythonw(self):
         self.assertTrue(schedule.python_for_task().lower().endswith("pythonw.exe"))
 

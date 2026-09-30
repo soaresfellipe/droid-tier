@@ -1,4 +1,4 @@
-"""Agenda `droid-tier run` a cada N minutos: systemd --user no Linux, Tarefa Agendada no Windows."""
+"""Schedules `droid-tier run` every N minutes: systemd --user on Linux, Scheduled Task on Windows."""
 import os
 import subprocess
 import sys
@@ -15,7 +15,7 @@ class ScheduleError(Exception):
 
 
 def python_for_task():
-    """Interpretador do pacote instalado. No Windows, pythonw.exe: sem console, sem janela piscando."""
+    """Interpreter of the installed package. On Windows, pythonw.exe: no console, no flashing window."""
     exe = sys.executable
     if os.name == "nt":
         w = os.path.join(os.path.dirname(exe), "pythonw.exe")
@@ -25,7 +25,7 @@ def python_for_task():
 
 
 def _run(cmd, check=True):
-    # schtasks escreve na codificacao OEM do console (cp850 no Windows em portugues).
+    # schtasks writes in the console OEM code page (e.g. cp850), not UTF-8.
     encoding = "oem" if os.name == "nt" else "utf-8"
     r = subprocess.run(cmd, capture_output=True, text=True, encoding=encoding, errors="replace")
     if check and r.returncode != 0:
@@ -42,12 +42,12 @@ def current_user():
 
 
 def task_xml(python, user, interval=INTERVAL_MIN):
-    # XML em vez de flags do schtasks: e o unico jeito de liberar a execucao
-    # na bateria e limitar o tempo de execucao.
+    # XML instead of schtasks flags: it's the only way to allow running on
+    # battery and to cap the run time.
     return f'''<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Troca os modelos do Droid conforme os limites da Factory (droid-tier)</Description>
+    <Description>Switches Droid's models according to Factory's limits (droid-tier)</Description>
   </RegistrationInfo>
   <Triggers>
     <TimeTrigger>
@@ -100,18 +100,18 @@ def install_windows():
     finally:
         os.remove(path)
     _run(["schtasks", "/Run", "/TN", TASK_NAME])
-    return f"Tarefa Agendada {TASK_NAME!r} criada: a cada {INTERVAL_MIN} min e no logon, com {python}"
+    return f"Scheduled Task {TASK_NAME!r} created: every {INTERVAL_MIN} min and at logon, with {python}"
 
 
 def uninstall_windows():
     r = _run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], check=False)
-    return "Tarefa Agendada removida" if r.returncode == 0 else "Nao havia Tarefa Agendada"
+    return "Scheduled Task removed" if r.returncode == 0 else "There was no Scheduled Task"
 
 
 def status_windows():
     r = _run(["schtasks", "/Query", "/TN", TASK_NAME, "/V", "/FO", "LIST"], check=False)
     if r.returncode != 0:
-        return "Tarefa Agendada nao instalada"
+        return "Scheduled Task not installed"
     return r.stdout.strip()
 
 
@@ -124,7 +124,7 @@ def unit_dir():
 
 def service_unit(python):
     return f"""[Unit]
-Description=Troca os modelos do Droid conforme os limites da Factory
+Description=Switches Droid's models according to Factory's limits
 After=network-online.target
 
 [Service]
@@ -135,7 +135,7 @@ ExecStart={python} -m droid_tier run
 
 def timer_unit(interval=INTERVAL_MIN):
     return f"""[Unit]
-Description=Consulta os limites da Factory a cada {interval} minutos
+Description=Checks Factory's limits every {interval} minutes
 
 [Timer]
 OnBootSec=1min
@@ -157,8 +157,8 @@ def install_linux():
         f.write(timer_unit())
     _run(["systemctl", "--user", "daemon-reload"])
     _run(["systemctl", "--user", "enable", "--now", f"{UNIT}.timer"])
-    return (f"Timer {UNIT}.timer ativo: a cada {INTERVAL_MIN} min, com {python}.\n"
-            "Para rodar sem sessao aberta: loginctl enable-linger")
+    return (f"Timer {UNIT}.timer active: every {INTERVAL_MIN} min, with {python}.\n"
+            "To run without an open session: loginctl enable-linger")
 
 
 def uninstall_linux():
@@ -170,15 +170,15 @@ def uninstall_linux():
             os.remove(path)
             removed = True
     _run(["systemctl", "--user", "daemon-reload"], check=False)
-    return "Timer removido" if removed else "Nao havia timer"
+    return "Timer removed" if removed else "There was no timer"
 
 
 def status_linux():
     r = _run(["systemctl", "--user", "list-timers", f"{UNIT}.timer", "--no-pager"], check=False)
-    return r.stdout.strip() or "Timer nao instalado"
+    return r.stdout.strip() or "Timer not installed"
 
 
-# ---------------------------------------------------------------- comando
+# ---------------------------------------------------------------- command
 
 def main(args):
     action = args[0] if args else "status"
@@ -187,7 +187,7 @@ def main(args):
     elif sys.platform.startswith("linux"):
         impl = {"install": install_linux, "uninstall": uninstall_linux, "status": status_linux}
     else:
-        raise ScheduleError(f"agendamento automatico ainda nao suportado em {sys.platform}")
+        raise ScheduleError(f"automatic scheduling is not supported on {sys.platform} yet")
     if action not in impl:
-        raise ScheduleError("uso: droid-tier schedule {install|uninstall|status}")
+        raise ScheduleError("usage: droid-tier schedule {install|uninstall|status}")
     print(impl[action]())

@@ -1,4 +1,4 @@
-"""Interface (Textual) para cadastrar providers, escolher modelos e montar fallbacks."""
+"""Textual interface to add providers, pick models and build fallbacks."""
 import datetime as dt
 import os
 import shutil
@@ -21,19 +21,19 @@ from . import catalog, configedit, core
 CUSTOM = "__custom__"
 ADD = "__add__"
 ROLE_LABELS = {
-    "session": "Sessão: padrão",
-    "spec": "Sessão: spec",
-    "subagent_light": "Subagente leve",
-    "subagent_medium": "Subagente médio",
-    "subagent_heavy": "Subagente pesado",
-    "orchestrator": "Missão: orquestrador",
-    "worker": "Missão: worker",
-    "validator": "Missão: validator",
+    "session": "Session: default",
+    "spec": "Session: spec",
+    "subagent_light": "Subagent: light",
+    "subagent_medium": "Subagent: medium",
+    "subagent_heavy": "Subagent: heavy",
+    "orchestrator": "Mission: orchestrator",
+    "worker": "Mission: worker",
+    "validator": "Mission: validator",
 }
 
 
 def focus_list(ol, index=None):
-    """Foca a lista com um item destacado, para o Enter funcionar de cara."""
+    """Focus the list with an item highlighted, so Enter works right away."""
     if ol.option_count:
         ol.highlighted = index if index is not None and index < ol.option_count else 0
     ol.focus()
@@ -48,7 +48,7 @@ def fmt_tokens(n):
 
 
 class State:
-    """Config (tomlkit) + settings do Droid carregados, com escrita segura."""
+    """Loaded config (tomlkit) + Droid settings, with safe writes."""
 
     def __init__(self, config_path=None):
         self.config_path = config_path or core.CONFIG_FILE
@@ -63,7 +63,7 @@ class State:
         configedit.save_doc(self.doc, self.config_path)
 
     def reload_settings(self):
-        """Rele do disco: o timer ou uma acao de degrau pode ter mudado o arquivo."""
+        """Reload from disk: the schedule or a tier action may have changed the file."""
         if os.path.exists(self.settings_path):
             self.settings = core.load_settings(self.settings_path)
 
@@ -77,7 +77,7 @@ class State:
         return configedit.get_providers(self.doc)
 
     def seen_native_ids(self):
-        """IDs nativos ja usados no settings, nos padroes guardados ou nos fallbacks."""
+        """Native ids already used in the settings, the saved defaults or the fallbacks."""
         seen = {m for m, _ in core.snapshot(self.settings).values()}
         seen |= {m for m, _ in (core.read_home() or {}).values()}
         for fb in configedit.get_fallbacks(self.doc):
@@ -92,7 +92,7 @@ class State:
         return sorted(managed | manual)
 
 
-# ---------------------------------------------------------------- telas auxiliares
+# ---------------------------------------------------------------- helper screens
 
 class Confirm(ModalScreen[bool]):
     def __init__(self, message):
@@ -103,8 +103,8 @@ class Confirm(ModalScreen[bool]):
         with Vertical(classes="dialog"):
             yield Static(self.message)
             with Horizontal(classes="buttons"):
-                yield Button("Sim", variant="error", id="yes")
-                yield Button("Não", id="no")
+                yield Button("Yes", variant="error", id="yes")
+                yield Button("No", id="no")
 
     @on(Button.Pressed)
     def done(self, event):
@@ -114,7 +114,7 @@ class Confirm(ModalScreen[bool]):
 # ---------------------------------------------------------------- menu
 
 class PickTier(ModalScreen):
-    """Escolhe um degrau para fixar."""
+    """Pick a tier to pin."""
 
     def __init__(self, names, pinned):
         super().__init__()
@@ -123,12 +123,12 @@ class PickTier(ModalScreen):
 
     def compose(self):
         with Vertical(classes="dialog"):
-            yield Static("Fixar em qual degrau? O timer para de trocar até você soltar.")
-            opts = [Option(("home (seus padrões)" if n == core.HOME_TIER else n)
-                           + ("  · fixado agora" if n == self.pinned else ""), id=n) for n in self.names]
+            yield Static("Pin which tier? The schedule stops switching until you unpin.")
+            opts = [Option(("home (your defaults)" if n == core.HOME_TIER else n)
+                           + ("  · pinned now" if n == self.pinned else ""), id=n) for n in self.names]
             yield OptionList(*opts, id="tiers")
             with Horizontal(classes="buttons"):
-                yield Button("Cancelar", id="cancel")
+                yield Button("Cancel", id="cancel")
 
     def on_mount(self):
         focus_list(self.query_one("#tiers", OptionList))
@@ -150,13 +150,13 @@ def bar(pct, threshold, width=24):
 
 
 def until(end, now=None):
-    """'2h13', '4d 6h', '12min' até o fim da janela."""
+    """'2h13', '4d 6h', '12min' until the window ends."""
     if not end:
         return ""
     now = now or dt.datetime.now(dt.timezone.utc)
     secs = (dt.datetime.fromisoformat(end.replace("Z", "+00:00")) - now).total_seconds()
     if secs <= 0:
-        return "virou"
+        return "reset"
     mins = int(secs // 60)
     if mins < 60:
         return f"{mins}min"
@@ -167,7 +167,7 @@ def until(end, now=None):
     return f"{days}d {hours}h"
 
 
-WINDOW_LABELS = {"fiveHour": "5 horas", "weekly": "semanal", "monthly": "mensal"}
+WINDOW_LABELS = {"fiveHour": "5 hours", "weekly": "weekly", "monthly": "monthly"}
 POOL_LABELS = {"standard": "Standard (Claude, GPT, Gemini)", "core": "Droid Core (GLM, DeepSeek...)"}
 
 
@@ -177,7 +177,7 @@ def render_limits(limits, threshold, now=None):
         out.append(("\n" if i else "") + POOL_LABELS[pool] + "\n", style="bold")
         data = limits.get(pool) or {}
         if not data:
-            out.append("  sem dados\n", style="dim")
+            out.append("  no data\n", style="dim")
         for w in core.WINDOWS:
             b = data.get(w) or {}
             if "usedPercent" not in b:
@@ -187,18 +187,18 @@ def render_limits(limits, threshold, now=None):
             out.append(bar(b["usedPercent"], threshold))
             out.append(f" {b['usedPercent']:>3.0f}%")
             if left:
-                out.append(f"  vira em {left}", style="dim")
+                out.append(f"  resets in {left}", style="dim")
             out.append("\n")
     return out
 
 
 class MainScreen(Screen):
-    BINDINGS = [Binding("q", "app.quit", "Sair"), Binding("r", "refresh_status", "Atualizar")]
+    BINDINGS = [Binding("q", "app.quit", "Quit"), Binding("r", "refresh_status", "Refresh")]
 
     def compose(self):
         yield Header()
         with Vertical(classes="body"):
-            yield Static("consultando limites da Factory…", id="tier")
+            yield Static("fetching Factory limits…", id="tier")
             yield Static(id="limits")
             yield OptionList(id="menu")
             yield Static(id="summary", classes="hint")
@@ -216,9 +216,9 @@ class MainScreen(Screen):
         fbs = configedit.get_fallbacks(st.doc)
         counts = [f"{pid} ({len(p.get('models') or [])})" for pid, p in providers.items()]
         self.query_one("#summary", Static).update(
-            "providers: " + (", ".join(counts) or "nenhum")
-            + "   fallbacks: " + (" → ".join(fb["name"] for fb in fbs) or "nenhum")
-            + f"\nconfig: {st.config_path}\nsettings do Droid: {st.settings_path}")
+            "providers: " + (", ".join(counts) or "none")
+            + "   fallbacks: " + (" → ".join(fb["name"] for fb in fbs) or "none")
+            + f"\nconfig: {st.config_path}\nDroid settings: {st.settings_path}")
         self.action_refresh_status()
 
     def build_menu(self):
@@ -226,14 +226,14 @@ class MainScreen(Screen):
         ol = self.query_one("#menu", OptionList)
         keep = ol.highlighted
         ol.clear_options()
-        items = [("apply", "Aplicar agora o degrau indicado pelos limites"),
-                 ("pin", "Fixar um degrau…")]
+        items = [("apply", "Apply the tier the limits call for now"),
+                 ("pin", "Pin a tier…")]
         if pinned:
-            items.append(("unpin", f"Soltar o degrau fixado ({pinned})"))
-        items += [("restore", "Restaurar meus padrões"),
-                  ("providers", "Providers e modelos"),
+            items.append(("unpin", f"Unpin ({pinned})"))
+        items += [("restore", "Restore my defaults"),
+                  ("providers", "Providers and models"),
                   ("fallbacks", "Fallbacks"),
-                  ("quit", "Sair")]
+                  ("quit", "Quit")]
         for oid, label in items:
             ol.add_option(Option(label, id=oid))
         focus_list(ol, keep)
@@ -248,9 +248,9 @@ class MainScreen(Screen):
             st["threshold"] = cfg["threshold"]
             self.app.call_from_thread(self.show_status, st, None)
         except core.ConfigError as e:
-            self.app.call_from_thread(self.show_status, None, f"Configuração incompleta: {e}")
+            self.app.call_from_thread(self.show_status, None, f"Incomplete configuration: {e}")
         except core.LimitsError as e:
-            self.app.call_from_thread(self.show_status, None, f"A API da Factory não respondeu: {e}")
+            self.app.call_from_thread(self.show_status, None, f"Factory's API didn't respond: {e}")
 
     def show_status(self, st, error):
         self.status = st
@@ -262,24 +262,24 @@ class MainScreen(Screen):
             self.build_menu()
             return
         t = Text()
-        t.append("Degrau atual: ")
+        t.append("Current tier: ")
         t.append(st["current"], style="bold")
         if st["pin"]:
-            t.append(f"   fixado em {st['pin']}", style="bold magenta")
+            t.append(f"   pinned to {st['pin']}", style="bold magenta")
         else:
-            t.append("   automático", style="dim")
-        t.append("\nPelos limites: ")
+            t.append("   automatic", style="dim")
+        t.append("\nFrom the limits: ")
         t.append(st["tier"], style="bold")
-        t.append(f"   (limiar {st['threshold']:.0f}%, seus padrões usam o pool {st['home_pool'] or 'nenhum'})",
+        t.append(f"   (threshold {st['threshold']:.0f}%, your defaults use the {st['home_pool'] or 'no'} pool)",
                  style="dim")
         if not st["pin"] and st["current"] != st["tier"]:
-            t.append(f"\nO timer troca para {st['tier']} na próxima rodada; ou use Aplicar agora.", style="yellow")
+            t.append(f"\nThe schedule switches to {st['tier']} on its next run; or use Apply now.", style="yellow")
         tier_w.update(t)
         limits_w.update(render_limits(st["limits"], st["threshold"]))
         self.build_menu()
 
     def act(self, fn):
-        """Roda uma ação do core fora da thread da interface (pode consultar a API) e atualiza tudo."""
+        """Run a core action off the UI thread (it may call the API) and refresh everything."""
         st = self.app.state
 
         def work():
@@ -289,11 +289,11 @@ class MainScreen(Screen):
                 self.app.call_from_thread(self.notify, str(e), severity="error", timeout=8)
                 return
             except core.LimitsError as e:
-                self.app.call_from_thread(self.notify, f"A API da Factory não respondeu, nada alterado: {e}",
+                self.app.call_from_thread(self.notify, f"Factory's API didn't respond, nothing changed: {e}",
                                           severity="error")
                 return
             st.reload_settings()
-            self.app.call_from_thread(self.notify, msg or "Nada a mudar: o settings já está no degrau indicado.")
+            self.app.call_from_thread(self.notify, msg or "Nothing to change: the settings are already on that tier.")
             self.app.call_from_thread(self.action_refresh_status)
 
         self.run_worker(work, thread=True, exclusive=True, group="action")
@@ -322,8 +322,8 @@ class MainScreen(Screen):
                 if yes:
                     self.act(core.restore)
 
-            self.app.push_screen(Confirm("Restaurar seus padrões agora e soltar o degrau fixado?\n"
-                                         "Se os limites continuarem estourados, o timer volta a trocar."), done)
+            self.app.push_screen(Confirm("Restore your defaults now and unpin?\n"
+                                         "If the limits are still exhausted, the schedule will switch again."), done)
         elif oid == "providers":
             self.app.push_screen(ProvidersScreen())
         elif oid == "fallbacks":
@@ -335,12 +335,12 @@ class MainScreen(Screen):
 # ---------------------------------------------------------------- providers
 
 class ProvidersScreen(Screen):
-    BINDINGS = [Binding("escape", "app.pop_screen", "Voltar"), Binding("d", "remove", "Remover provider")]
+    BINDINGS = [Binding("escape", "app.pop_screen", "Back"), Binding("d", "remove", "Remove provider")]
 
     def compose(self):
         yield Header()
         with Vertical(classes="body"):
-            yield Static("Providers de fallback. Enter edita os modelos; d remove.", classes="hint")
+            yield Static("Fallback providers. Enter edits the models; d removes.", classes="hint")
             yield OptionList(id="list")
         yield Footer()
 
@@ -349,8 +349,8 @@ class ProvidersScreen(Screen):
         ol.clear_options()
         for pid, p in self.app.state.providers().items():
             n = len(p.get("models") or [])
-            ol.add_option(Option(f"{p.get('name') or pid}  ·  {n} modelo(s)  ·  {p.get('base_url', '')}", id=pid))
-        ol.add_option(Option("+ Adicionar provider", id=ADD))
+            ol.add_option(Option(f"{p.get('name') or pid}  ·  {n} model(s)  ·  {p.get('base_url', '')}", id=pid))
+        ol.add_option(Option("+ Add provider", id=ADD))
         focus_list(ol)
 
     def on_mount(self):
@@ -376,14 +376,14 @@ class ProvidersScreen(Screen):
         st = self.app.state
         users = configedit.fallback_users(st.doc, pid)
         if users:
-            self.notify(f"Usado pelos fallbacks: {', '.join(users)}. Remova-os antes.", severity="error")
+            self.notify(f"Used by fallbacks: {', '.join(users)}. Remove them first.", severity="error")
             return
         p = st.providers()[pid]
         managed = set(p.get("models") or [])
         ids = [e["id"] for e in catalog.provider_entries(st.settings, p["base_url"]) if e.get("model") in managed]
         busy = catalog.in_use(st.settings, core.read_home(), ids)
         if busy:
-            self.notify(f"Em uso no settings do Droid: {', '.join(busy)}", severity="error")
+            self.notify(f"In use in Droid's settings: {', '.join(busy)}", severity="error")
             return
 
         def go(yes):
@@ -395,25 +395,25 @@ class ProvidersScreen(Screen):
             st.save_settings()
             configedit.remove_provider(st.doc, pid)
             st.save_config()
-            self.notify(f"{pid} removido")
+            self.notify(f"{pid} removed")
             self.on_screen_resume()
 
-        self.app.push_screen(Confirm(f"Remover {pid} e os {len(managed)} modelo(s) que o droid-tier cadastrou?"), go)
+        self.app.push_screen(Confirm(f"Remove {pid} and the {len(managed)} model(s) droid-tier added?"), go)
 
 
 class ProviderPickScreen(Screen):
-    BINDINGS = [Binding("escape", "app.pop_screen", "Voltar")]
+    BINDINGS = [Binding("escape", "app.pop_screen", "Back")]
 
     def compose(self):
         yield Header()
         with Vertical(classes="body"):
-            yield Static("Escolha o provider (catálogo do models.dev).", classes="hint")
-            yield Input(placeholder="buscar provider…", id="search")
+            yield Static("Pick a provider (models.dev catalog).", classes="hint")
+            yield Input(placeholder="search providers…", id="search")
             yield OptionList(id="list")
         yield Footer()
 
     def on_mount(self):
-        self.query_one("#list", OptionList).add_option(Option("carregando catálogo…", disabled=True))
+        self.query_one("#list", OptionList).add_option(Option("loading catalog…", disabled=True))
         self.run_worker(self.load, thread=True)
 
     def load(self):
@@ -422,9 +422,9 @@ class ProviderPickScreen(Screen):
             if st.md is None:
                 st.md = catalog.load_models_dev()
             self.all = catalog.providers(st.md)
-        except Exception as e:  # sem rede e sem cache
+        except Exception as e:  # no network and no cache
             self.all = []
-            self.app.call_from_thread(self.notify, f"Catálogo indisponível: {e}", severity="warning")
+            self.app.call_from_thread(self.notify, f"Catalog unavailable: {e}", severity="warning")
         self.app.call_from_thread(self.refresh_list)
 
     @on(Input.Changed, "#search")
@@ -432,7 +432,7 @@ class ProviderPickScreen(Screen):
         q = self.query_one("#search", Input).value.lower().strip()
         ol = self.query_one("#list", OptionList)
         ol.clear_options()
-        ol.add_option(Option("+ URL personalizada (compatível com OpenAI ou Anthropic)", id=CUSTOM))
+        ol.add_option(Option("+ Custom URL (OpenAI or Anthropic compatible)", id=CUSTOM))
         for p in getattr(self, "all", []):
             if q and q not in p.name.lower() and q not in p.id.lower():
                 continue
@@ -453,7 +453,7 @@ class ProviderPickScreen(Screen):
 
 
 class KeyScreen(Screen):
-    BINDINGS = [Binding("escape", "app.pop_screen", "Voltar")]
+    BINDINGS = [Binding("escape", "app.pop_screen", "Back")]
 
     def __init__(self, provider, prefix=None, existing=False):
         super().__init__()
@@ -468,22 +468,22 @@ class KeyScreen(Screen):
         yield Header()
         with VerticalScroll(classes="body form"):
             if p is None:
-                yield Label("ID do provider (usado no config)")
-                yield Input(id="pid", placeholder="meu-provider")
-                yield Label("Nome")
-                yield Input(id="pname", placeholder="Meu Provider")
+                yield Label("Provider ID (used in the config)")
+                yield Input(id="pid", placeholder="my-provider")
+                yield Label("Name")
+                yield Input(id="pname", placeholder="My Provider")
                 yield Label("Base URL")
-                yield Input(id="base", placeholder="https://api.exemplo.com/v1")
-                yield Label("Tipo de API")
+                yield Input(id="base", placeholder="https://api.example.com/v1")
+                yield Label("API type")
                 yield Select([(k, k) for k in catalog.DROID_KINDS], value=catalog.DROID_KINDS[0],
                              allow_blank=False, id="kind")
             else:
-                yield Static(f"[b]{p.name}[/b]\n{p.base_url}\ntipo: {p.kind}")
+                yield Static(f"[b]{p.name}[/b]\n{p.base_url}\ntype: {p.kind}")
             yield Label("API key")
             yield Input(value=key, password=True, id="key")
-            yield Label("Prefixo do nome no seletor do Droid (ex.: OC → \"OC GLM-5.3\")")
+            yield Label("Name prefix in Droid's model picker (e.g. OC → \"OC GLM-5.3\")")
             yield Input(value=self.prefix if self.prefix is not None else (p.name if p else ""), id="prefix")
-            yield Button("Buscar modelos", variant="primary", id="go")
+            yield Button("Fetch models", variant="primary", id="go")
         yield Footer()
 
     @on(Button.Pressed, "#go")
@@ -494,20 +494,20 @@ class KeyScreen(Screen):
             pid = self.query_one("#pid", Input).value.strip()
             base = self.query_one("#base", Input).value.strip().rstrip("/")
             if not pid or not base.startswith("http"):
-                self.notify("Informe o ID e uma base URL http(s).", severity="error")
+                self.notify("Enter the ID and an http(s) base URL.", severity="error")
                 return
             p = catalog.Provider(pid, self.query_one("#pname", Input).value.strip() or pid, base,
                                  self.query_one("#kind", Select).value)
         key = self.query_one("#key", Input).value.strip()
         if not key:
-            self.notify("Informe a API key.", severity="error")
+            self.notify("Enter the API key.", severity="error")
             return
         prefix = self.query_one("#prefix", Input).value.strip()
         self.app.push_screen(ModelPickScreen(p, key, prefix))
 
 
 class ModelPickScreen(Screen):
-    BINDINGS = [Binding("escape", "app.pop_screen", "Voltar"), Binding("ctrl+s", "save", "Salvar")]
+    BINDINGS = [Binding("escape", "app.pop_screen", "Back"), Binding("ctrl+s", "save", "Save")]
 
     def __init__(self, provider, api_key, prefix):
         super().__init__()
@@ -520,11 +520,11 @@ class ModelPickScreen(Screen):
     def compose(self):
         yield Header()
         with Vertical(classes="body"):
-            yield Static(f"{self.provider.name}: carregando modelos…", id="info")
-            yield Input(placeholder="buscar modelo…", id="search")
+            yield Static(f"{self.provider.name}: loading models…", id="info")
+            yield Input(placeholder="search models…", id="search")
             yield SelectionList(id="list")
             with Horizontal(classes="buttons"):
-                yield Button("Salvar (ctrl+s)", variant="primary", id="save")
+                yield Button("Save (ctrl+s)", variant="primary", id="save")
         yield Footer()
 
     def on_mount(self):
@@ -542,8 +542,8 @@ class ModelPickScreen(Screen):
         except Exception:
             st.md = {}
         self.models, live = catalog.list_models(self.provider, self.api_key, st.md)
-        src = "lista ao vivo do provider" if live else "catálogo do models.dev (o provider não respondeu a /models)"
-        msg = f"{self.provider.name}: {len(self.models)} modelos, {src}. Espaço marca, ctrl+s salva."
+        src = "live list from the provider" if live else "models.dev catalog (the provider didn't answer /models)"
+        msg = f"{self.provider.name}: {len(self.models)} models, {src}. Space checks, ctrl+s saves."
         self.app.call_from_thread(self.query_one("#info", Static).update, msg)
         self.app.call_from_thread(self.refresh_list)
 
@@ -574,7 +574,7 @@ class ModelPickScreen(Screen):
         st = self.app.state
         st.reload_settings()
         selected = [m for m in self.models if m.id in self.chosen]
-        # Modelos marcados que nao vieram na lista (cadastrados a mao) continuam.
+        # Checked models that weren't in the list (added by hand) stay.
         known = {m.id for m in self.models}
         selected += [catalog.Model(mid) for mid in self.chosen - known if mid]
         dropping = self.managed - self.chosen
@@ -582,25 +582,25 @@ class ModelPickScreen(Screen):
                if e.get("model") in dropping]
         busy = catalog.in_use(st.settings, core.read_home(), ids)
         if busy:
-            self.notify(f"Não dá para desmarcar, em uso no Droid: {', '.join(busy)}", severity="error")
+            self.notify(f"Can't uncheck, in use in Droid: {', '.join(busy)}", severity="error")
             return
         used_by_fb = [fb["name"] for fb in configedit.get_fallbacks(st.doc)
                       if fb.get("provider") == self.provider.id
                       and any((fb.get(r) or "").split("@")[0] in dropping for r in core.ROLES)]
         if used_by_fb:
-            self.notify(f"Desmarcados em uso pelos fallbacks: {', '.join(used_by_fb)}", severity="error")
+            self.notify(f"Unchecked models are used by fallbacks: {', '.join(used_by_fb)}", severity="error")
             return
         added, removed = catalog.sync_custom_models(st.settings, self.provider, selected, self.api_key,
                                                     self.prefix, self.managed)
         st.save_settings()
-        # O droid-tier passa a gerenciar tudo que foi marcado aqui.
+        # droid-tier now manages everything checked here.
         configedit.upsert_provider(st.doc, self.provider.id, name=self.provider.name,
                                    base_url=self.provider.base_url, kind=self.provider.kind,
                                    prefix=self.prefix, models=sorted(self.chosen))
         st.save_config()
-        self.notify(f"{len(added)} adicionado(s), {len(removed)} removido(s) em customModels")
+        self.notify(f"{len(added)} added, {len(removed)} removed in customModels")
         self.app.pop_screen()
-        # volta para a lista de providers
+        # back to the provider list
         while not isinstance(self.app.screen, (ProvidersScreen, MainScreen)):
             self.app.pop_screen()
 
@@ -609,16 +609,16 @@ class ModelPickScreen(Screen):
 
 class FallbacksScreen(Screen):
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Voltar"),
-        Binding("d", "remove", "Remover"),
-        Binding("k", "move(-1)", "Subir"),
-        Binding("j", "move(1)", "Descer"),
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("d", "remove", "Remove"),
+        Binding("k", "move(-1)", "Up"),
+        Binding("j", "move(1)", "Down"),
     ]
 
     def compose(self):
         yield Header()
         with Vertical(classes="body"):
-            yield Static("Fallbacks em ordem: vale o primeiro com folga. Enter edita; k/j reordena; d remove.",
+            yield Static("Fallbacks in order: the first one with room wins. Enter edits; k/j reorder; d removes.",
                          classes="hint")
             yield OptionList(id="list")
         yield Footer()
@@ -630,8 +630,8 @@ class FallbacksScreen(Screen):
         for i, fb in enumerate(configedit.get_fallbacks(self.app.state.doc), 1):
             src = f"pool {fb['pool']}" if fb.get("pool") else f"provider {fb.get('provider')}"
             roles = sum(1 for r in core.ROLES if fb.get(r))
-            ol.add_option(Option(f"{i}. {fb['name']}  ·  {src}  ·  {roles}/8 papéis", id=str(i - 1)))
-        ol.add_option(Option("+ Novo fallback", id=ADD))
+            ol.add_option(Option(f"{i}. {fb['name']}  ·  {src}  ·  {roles}/8 roles", id=str(i - 1)))
+        ol.add_option(Option("+ New fallback", id=ADD))
         focus_list(ol, keep)
 
     def on_mount(self):
@@ -673,11 +673,11 @@ class FallbacksScreen(Screen):
                 self.app.state.save_config()
                 self.on_screen_resume()
 
-        self.app.push_screen(Confirm(f"Remover o fallback {fbs[i]['name']}?"), go)
+        self.app.push_screen(Confirm(f"Remove the {fbs[i]['name']} fallback?"), go)
 
 
 class FallbackEditScreen(Screen):
-    BINDINGS = [Binding("escape", "app.pop_screen", "Voltar"), Binding("ctrl+s", "save", "Salvar")]
+    BINDINGS = [Binding("escape", "app.pop_screen", "Back"), Binding("ctrl+s", "save", "Save")]
 
     def __init__(self, index):
         super().__init__()
@@ -688,28 +688,28 @@ class FallbackEditScreen(Screen):
         st = self.app.state
         fbs = configedit.get_fallbacks(st.doc)
         self.fb = fbs[self.index] if self.index is not None else {"name": ""}
-        sources = [("Factory: pool Standard (Claude, GPT, Gemini…)", "pool:standard"),
-                   ("Factory: pool Droid Core (GLM, DeepSeek…)", "pool:core")]
+        sources = [("Factory: Standard pool (Claude, GPT, Gemini…)", "pool:standard"),
+                   ("Factory: Droid Core pool (GLM, DeepSeek…)", "pool:core")]
         sources += [(f"Provider: {p.get('name') or pid}", f"provider:{pid}") for pid, p in st.providers().items()]
         current = (f"pool:{self.fb['pool']}" if self.fb.get("pool")
                    else f"provider:{self.fb['provider']}" if self.fb.get("provider") else Select.NULL)
         yield Header()
         with VerticalScroll(classes="body form"):
-            yield Label("Nome")
+            yield Label("Name")
             yield Input(value=self.fb.get("name", ""), id="name")
-            yield Label("De onde vêm os modelos")
-            yield Select(sources, value=current, prompt="escolha…", id="source")
-            yield Label("Modelo que não aparece na lista? Digite o ID e Enter")
-            yield Input(placeholder="ex.: deepseek-v4.1-flash", id="extra")
-            yield Static("Papel sem modelo = não alterado. Esforço vazio = o que estiver no settings.",
+            yield Label("Where the models come from")
+            yield Select(sources, value=current, prompt="choose…", id="source")
+            yield Label("Model not in the list? Type its ID and press Enter")
+            yield Input(placeholder="e.g. deepseek-v4.1-flash", id="extra")
+            yield Static("Role without a model = unchanged. Empty effort = whatever is in the settings.",
                          classes="hint")
             for role, label in ROLE_LABELS.items():
                 with Horizontal(classes="role"):
                     yield Label(label, classes="role-label")
-                    yield Select([], prompt="não alterar", id=f"m-{role}", classes="role-model")
-                    yield Select([(e, e) for e in catalog.EFFORTS], prompt="esforço", id=f"e-{role}",
+                    yield Select([], prompt="don't change", id=f"m-{role}", classes="role-model")
+                    yield Select([(e, e) for e in catalog.EFFORTS], prompt="effort", id=f"e-{role}",
                                  classes="role-effort")
-            yield Button("Salvar (ctrl+s)", variant="primary", id="save")
+            yield Button("Save (ctrl+s)", variant="primary", id="save")
         yield Footer()
 
     def on_mount(self):
@@ -732,16 +732,16 @@ class FallbackEditScreen(Screen):
             pool = source[5:]
             natives = st.natives or []
             if not natives:
-                self.notify("Não achei o `droid` no PATH para listar os modelos da Factory.", severity="warning")
+                self.notify("`droid` not found in PATH, so Factory's models can't be listed.", severity="warning")
             options = [(f"{m.name} ({m.id})", m.id) for m in natives if m.pool == pool and not m.deprecated]
-            # O `droid exec --help` omite modelos que funcionam; os que ja estao em uso entram tambem.
+            # `droid exec --help` leaves out models that work; the ones already in use are added too.
             listed = {v for _, v in options}
-            options += [(f"{mid} (fora da lista)", mid) for mid in st.seen_native_ids()
+            options += [(f"{mid} (not listed)", mid) for mid in st.seen_native_ids()
                         if mid not in listed and core.infer_pool({"x": (mid, None)}) == pool]
         elif isinstance(source, str) and source.startswith("provider:"):
             options = [(mid, mid) for mid in st.provider_models(source[9:])]
         values = {v for _, v in options}
-        options += [(f"{mid} (digitado)", mid) for mid in sorted(self.extra) if mid not in values]
+        options += [(f"{mid} (typed)", mid) for mid in sorted(self.extra) if mid not in values]
         values |= self.extra
         for role in core.ROLES:
             sel = self.query_one(f"#m-{role}", Select)
@@ -749,14 +749,14 @@ class FallbackEditScreen(Screen):
             model = sel.value if isinstance(sel.value, str) else saved
             options_role = options
             if model and model not in values:
-                options_role = options + [(f"{model} (fora da lista)", model)]
+                options_role = options + [(f"{model} (not listed)", model)]
             sel.set_options(options_role)
             if model:
                 sel.value = model
             self.update_efforts(role, wanted=effort or None)
 
     def allowed_efforts(self, model):
-        """Esforcos que o Droid aceita para o modelo, conforme a origem escolhida."""
+        """Efforts Droid accepts for the model, given the chosen source."""
         st = self.app.state
         natives = st.natives or []
         source = self.query_one("#source", Select).value
@@ -775,8 +775,8 @@ class FallbackEditScreen(Screen):
         if current in allowed:
             esel.value = current
         elif current:
-            self.notify(f"{ROLE_LABELS[role]}: {model} não aceita esforço {current} "
-                        f"(aceita: {', '.join(allowed)})", severity="warning")
+            self.notify(f"{ROLE_LABELS[role]}: {model} doesn't accept effort {current} "
+                        f"(accepts: {', '.join(allowed)})", severity="warning")
 
     @on(Select.Changed, ".role-model")
     def model_changed(self, event):
@@ -789,7 +789,7 @@ class FallbackEditScreen(Screen):
             self.extra.add(mid)
             event.input.value = ""
             self.fill_models()
-            self.notify(f"{mid} adicionado às opções")
+            self.notify(f"{mid} added to the options")
 
     @on(Button.Pressed, "#save")
     def action_save(self):
@@ -797,14 +797,14 @@ class FallbackEditScreen(Screen):
         name = self.query_one("#name", Input).value.strip()
         source = self.query_one("#source", Select).value
         if not name or name == core.HOME_TIER:
-            self.notify("Dê um nome ao fallback (\"home\" é reservado).", severity="error")
+            self.notify("Give the fallback a name (\"home\" is reserved).", severity="error")
             return
         if source is Select.NULL:
-            self.notify("Escolha de onde vêm os modelos.", severity="error")
+            self.notify("Choose where the models come from.", severity="error")
             return
         fbs = configedit.get_fallbacks(st.doc)
         if any(fb["name"] == name for i, fb in enumerate(fbs) if i != self.index):
-            self.notify(f"Já existe um fallback {name!r}.", severity="error")
+            self.notify(f"There is already a fallback named {name!r}.", severity="error")
             return
         kind, _, ref = source.partition(":")
         new = {"name": name, kind: ref}
@@ -815,7 +815,7 @@ class FallbackEditScreen(Screen):
                 continue
             new[role] = model + (f"@{effort}" if effort is not Select.NULL else "")
         if not any(r in new for r in core.ROLES):
-            self.notify("Escolha o modelo de pelo menos um papel.", severity="error")
+            self.notify("Choose a model for at least one role.", severity="error")
             return
         if self.index is None:
             fbs.append(new)
@@ -827,9 +827,9 @@ class FallbackEditScreen(Screen):
             cfg = core.load_config(st.config_path)
             core.resolve_all(cfg, st.settings)
         except core.ConfigError as e:
-            self.notify(f"Salvo, mas o config tem um problema: {e}", severity="warning", timeout=10)
+            self.notify(f"Saved, but the config has a problem: {e}", severity="warning", timeout=10)
         else:
-            self.notify(f"Fallback {name} salvo")
+            self.notify(f"Fallback {name} saved")
         self.app.pop_screen()
 
 
@@ -837,7 +837,7 @@ class FallbackEditScreen(Screen):
 
 class DroidTierApp(App):
     TITLE = "droid-tier"
-    SUB_TITLE = "providers, modelos e fallbacks"
+    SUB_TITLE = "limits, providers and fallbacks"
     CSS = """
     .body { padding: 1 2; }
     .hint { color: $text-muted; margin-bottom: 1; }
@@ -865,11 +865,11 @@ class DroidTierApp(App):
 
 
 def discard_pending_input(wait=0.3):
-    """Joga fora o que chegou no terminal depois que o Textual parou de ler.
+    """Discard whatever reached the terminal after Textual stopped reading.
 
-    O Textual desliga o rastreamento do mouse ao sair, mas relatorios que o
-    terminal ja tinha enviado (ex.: ^[[<35;11;22M) ainda estao a caminho,
-    principalmente por SSH, e cairiam no shell como texto."""
+    Textual turns mouse tracking off on exit, but reports the terminal had
+    already sent (e.g. ^[[<35;11;22M) are still in flight, especially over
+    SSH, and would land in the shell as text."""
     time.sleep(wait)
     try:
         if os.name == "nt":

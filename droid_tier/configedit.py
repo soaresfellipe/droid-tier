@@ -1,4 +1,4 @@
-"""Edicao do config.toml preservando comentarios (tomlkit)."""
+"""Editing config.toml while keeping comments (tomlkit)."""
 import os
 import tempfile
 
@@ -7,10 +7,10 @@ import tomlkit
 from . import core
 
 NEW_CONFIG = '''\
-# droid-tier: fallbacks para quando os limites da Factory acabam.
-# Os seus padroes do Droid nao entram aqui; veja `droid-tier check`.
+# droid-tier: fallbacks for when your Factory limits run out.
+# Your Droid defaults don't go here; see `droid-tier check`.
 
-# Troca quando qualquer janela (5h, semanal, mensal) passa deste %.
+# Switch when any window (5h, weekly, monthly) goes over this %.
 threshold = 95
 '''
 

@@ -64,14 +64,14 @@ class EffortsTest(unittest.TestCase):
     def test_rules(self):
         n = self.natives()
         self.assertEqual(catalog.efforts_for("glm-5.3-flash", n), ["low", "high", "max"])
-        self.assertIsNone(catalog.efforts_for("desconhecido", n))
-        # custom com o mesmo nome de um nativo herda os esforcos dele
+        self.assertIsNone(catalog.efforts_for("unknown-model", n))
+        # a custom model named like a native inherits its efforts
         self.assertEqual(catalog.efforts_for("glm-5.3-flash", n, {"model": "glm-5.3-flash"}), ["low", "high", "max"])
-        # custom sem nativo e sem reasoningEffort: raciocinio desligado
+        # custom without a native match and without reasoningEffort: reasoning off
         self.assertEqual(catalog.efforts_for("z-ai/glm-5.3", n, {"model": "z-ai/glm-5.3"}), ["none"])
         self.assertEqual(catalog.efforts_for("z-ai/glm-5.3", n, {"model": "z-ai/glm-5.3", "reasoningEffort": "high"}),
                          ["off", "low", "medium", "high"])
-        # nome que pode ser de um nativo omitido pelo --help: desconhecido, nao "none"
+        # a name that could be a native left out of --help: unknown, not "none"
         self.assertIsNone(catalog.efforts_for("deepseek-v4.1-flash", n, {"model": "deepseek-v4.1-flash"}))
         self.assertEqual(catalog.efforts_for("x", n, {"model": "x", "reasoningEffort": "max"}),
                          ["off", "low", "medium", "high", "max"])
@@ -86,7 +86,7 @@ class EffortsTest(unittest.TestCase):
         s = {"customModels": [{"model": "z-ai/glm-5.3", "id": "custom:GLM-0", "baseUrl": "https://p/v1"}]}
         catalog.sync_custom_models(s, prov, [meta["z-ai/glm-5.3"], meta["plain"]], "k", "P", set())
         by = {e["model"]: e for e in s["customModels"]}
-        self.assertEqual(by["z-ai/glm-5.3"]["reasoningEffort"], "high")  # existente ganhou
+        self.assertEqual(by["z-ai/glm-5.3"]["reasoningEffort"], "high")  # the existing entry got it
         self.assertNotIn("reasoningEffort", by["plain"])
 
 
@@ -102,7 +102,7 @@ class CatalogTest(unittest.TestCase):
         with mock.patch.object(catalog, "fetch_live_models", return_value=["glm-5.3", "deepseek-flash"]):
             models, live = catalog.list_models(OC, "k", MD)
         self.assertTrue(live)
-        self.assertEqual([m.id for m in models], ["deepseek-flash", "glm-5.3"])  # grok-4.5 so no catalogo
+        self.assertEqual([m.id for m in models], ["deepseek-flash", "glm-5.3"])  # grok-4.5 only in the catalog
         self.assertEqual(models[1].context, 1000000)
         self.assertIsNone(models[0].context)
 
@@ -130,12 +130,12 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(added, ["glm-5.3-flash"])
         self.assertEqual(removed, ["grok-4.5"])
         by_model = {(e["baseUrl"], e["model"]): e for e in s["customModels"]}
-        # existente mantem o id e ganha a key nova
+        # the existing entry keeps its id and gets the new key
         kept = by_model[(OC.base_url, "glm-5.3")]
         self.assertEqual((kept["id"], kept["apiKey"]), ("custom:OC-GLM-5.3-0", "new"))
-        # manual (nao gerenciado) fica, mesmo nao marcado
+        # manual (unmanaged) stays, even unchecked
         self.assertIn((OC.base_url + "/", "mimo-manual"), by_model)
-        # outro provider intocado
+        # another provider untouched
         self.assertIn(("https://api.z.ai/api/anthropic", "glm-5.3"), by_model)
         new = by_model[(OC.base_url, "glm-5.3-flash")]
         self.assertEqual(new["id"], "custom:OC-GLM-5.3-Flash-0")
@@ -147,7 +147,7 @@ class SyncTest(unittest.TestCase):
 
     def test_duplicate_display_name_gets_next_suffix(self):
         s = {"customModels": [{"model": "x", "id": "custom:OC-GLM-5.3-0", "displayName": "OC GLM-5.3",
-                               "baseUrl": "https://outro"}]}
+                               "baseUrl": "https://other"}]}
         catalog.sync_custom_models(s, OC, [catalog.md_models(MD, "opencode-go")["glm-5.3"]], "k", "OC", set())
         self.assertEqual(s["customModels"][1]["id"], "custom:OC-GLM-5.3-1")
 
@@ -162,7 +162,7 @@ class ConfigEditTest(unittest.TestCase):
     def test_round_trip_keeps_comments_and_validates(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "config.toml")
-            doc = configedit.load_doc(path)  # novo
+            doc = configedit.load_doc(path)  # new
             configedit.upsert_provider(doc, "opencode-go", name="OpenCode Go", base_url=OC.base_url,
                                        kind=OC.kind, prefix="OC", models=["glm-5.3", "glm-5.3-flash"])
             configedit.set_fallbacks(doc, [
@@ -171,12 +171,12 @@ class ConfigEditTest(unittest.TestCase):
             ])
             configedit.save_doc(doc, path)
             text = open(path, encoding="utf-8").read()
-            self.assertIn("# Troca quando", text)
+            self.assertIn("# Switch when", text)
             cfg = core.load_config(path)
             self.assertEqual([fb["name"] for fb in cfg["fallbacks"]], ["droid", "oc"])
             self.assertEqual(cfg["providers"]["opencode-go"]["models"], ["glm-5.3", "glm-5.3-flash"])
 
-            # reordenar e remover provider mantem o resto
+            # reordering keeps everything else
             doc = configedit.load_doc(path)
             fbs = configedit.get_fallbacks(doc)
             configedit.set_fallbacks(doc, list(reversed(fbs)))

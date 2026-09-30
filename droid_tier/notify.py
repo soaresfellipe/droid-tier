@@ -1,6 +1,6 @@
-"""Avisos de troca de degrau: notificacao do sistema, ntfy e webhook JSON.
+"""Tier change notifications: system notification, ntfy and JSON webhook.
 
-So biblioteca padrao (roda no timer). Falha em aviso nunca interrompe a troca.
+Standard library only (runs in the schedule). A failed notification never stops the switch.
 """
 import base64
 import json
@@ -19,19 +19,19 @@ def validate(section):
     if section is None:
         return {}
     if not isinstance(section, dict):
-        raise core.ConfigError("[notify] deve ser uma tabela")
+        raise core.ConfigError("[notify] must be a table")
     unknown = set(section) - set(KEYS)
     if unknown:
-        raise core.ConfigError(f"[notify]: campos desconhecidos {sorted(unknown)}")
+        raise core.ConfigError(f"[notify]: unknown fields {sorted(unknown)}")
     for key in ("ntfy", "webhook"):
         url = section.get(key)
         if url is not None and not (isinstance(url, str) and url.startswith(("http://", "https://"))):
-            raise core.ConfigError(f"[notify] {key} deve ser uma URL http(s)")
+            raise core.ConfigError(f"[notify] {key} must be an http(s) URL")
     return section
 
 
 def send(cfg, title, message, event=None):
-    """Dispara todos os canais configurados. Devolve a lista de canais que falharam."""
+    """Send through every configured channel. Returns the channels that failed."""
     section = cfg.get("notify") or {}
     failed = []
     for channel, enabled, fn in (
@@ -43,14 +43,14 @@ def send(cfg, title, message, event=None):
             continue
         try:
             fn()
-        except Exception as e:  # aviso e acessorio; registra e segue
+        except Exception as e:  # notifications are secondary; log and move on
             failed.append(channel)
-            core.log(f"aviso por {channel} falhou: {e}")
+            core.log(f"{channel} notification failed: {e}")
     return failed
 
 
 def ntfy(url, title, message):
-    # Cabecalho HTTP nao leva acento; o ntfy aceita RFC 2047 (=?UTF-8?B?...?=).
+    # HTTP headers are ASCII; ntfy accepts RFC 2047 (=?UTF-8?B?...?=) for anything else.
     encoded_title = "=?UTF-8?B?" + base64.b64encode(title.encode("utf-8")).decode("ascii") + "?="
     req = urllib.request.Request(url, data=message.encode("utf-8"), method="POST",
                                  headers={"Title": encoded_title, "Tags": "robot", "User-Agent": "droid-tier"})
@@ -69,16 +69,16 @@ def desktop(title, message):
         _windows_toast(title, message)
     elif sys.platform.startswith("linux"):
         if not shutil.which("notify-send"):
-            raise RuntimeError("notify-send nao encontrado")
+            raise RuntimeError("notify-send not found")
         if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
                 or os.environ.get("DBUS_SESSION_BUS_ADDRESS")):
-            raise RuntimeError("sem sessao grafica para notify-send")
+            raise RuntimeError("no graphical session for notify-send")
         subprocess.run(["notify-send", "-a", "droid-tier", title, message], check=True, timeout=10)
     else:
-        raise RuntimeError(f"notificacao do sistema nao suportada em {sys.platform}")
+        raise RuntimeError(f"system notifications are not supported on {sys.platform}")
 
 
-# AppID do PowerShell: o Windows so mostra toast de um app registrado.
+# PowerShell's AppID: Windows only shows toasts from a registered app.
 _PS_APP_ID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
 
 
@@ -95,7 +95,7 @@ $x.Item(1).AppendChild($t.CreateTextNode({ps_str(message)})) > $null
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier({ps_str(_PS_APP_ID)}).Show(
     [Windows.UI.Notifications.ToastNotification]::new($t))
 """
-    # CREATE_NO_WINDOW: sem isso o PowerShell pisca um console quando chamado pelo pythonw da tarefa.
+    # CREATE_NO_WINDOW: otherwise PowerShell flashes a console when called from the task's pythonw.
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                    check=True, timeout=20, capture_output=True,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

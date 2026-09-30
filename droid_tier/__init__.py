@@ -1,2 +1,2 @@
-"""droid-tier: troca os modelos do Droid conforme os limites da Factory."""
-__version__ = "0.3.0"
+"""droid-tier: switches Droid's models according to Factory's usage limits."""
+__version__ = "0.4.0"

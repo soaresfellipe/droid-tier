@@ -14,7 +14,7 @@ FUTURE = "2026-10-05T04:35:21.628Z"
 PAST = "2026-09-01T00:00:00Z"
 
 OC_URL = "https://opencode.ai/zen/go/v1"
-# Padroes da pessoa: Standard, e sem esforco definido para o validator.
+# The user's defaults: Standard, with no effort set for the validator.
 SETTINGS = {
     "trustedFolders": {"/home/x": {}},
     "sessionDefaultSettings": {"model": "claude-sonnet-5-5", "reasoningEffort": "medium",
@@ -24,8 +24,8 @@ SETTINGS = {
                              "skipUserTesting": True},
     "imageGenerationModel": "gemini-3-pro-image-preview",
     "customModels": [
-        {"model": "glm-5.3-flash", "id": "custom:OC-GLM-5.3-Flash-7", "baseUrl": OC_URL + "/", "apiKey": "segredo"},
-        {"model": "glm-5.3", "id": "custom:OC-GLM-5.3-6", "baseUrl": OC_URL, "apiKey": "segredo"},
+        {"model": "glm-5.3-flash", "id": "custom:OC-GLM-5.3-Flash-7", "baseUrl": OC_URL + "/", "apiKey": "secret"},
+        {"model": "glm-5.3", "id": "custom:OC-GLM-5.3-6", "baseUrl": OC_URL, "apiKey": "secret"},
         {"model": "deepseek-v4.1-flash", "id": "custom:OC-DeepSeek-V4.1-Flash-2", "baseUrl": OC_URL},
         {"model": "glm-5.3", "id": "custom:ZAI-GLM-5.3-0", "baseUrl": "https://api.z.ai/api/anthropic"},
     ],
@@ -57,7 +57,7 @@ class Base(unittest.TestCase):
     def config(self, text):
         path = os.path.join(self.dir.name, "config.toml")
         with open(path, "w") as f:
-            # chaves de topo precisam vir antes de qualquer tabela no TOML
+            # top-level keys must come before any table in TOML
             f.write(f'settings = "{self.settings_path.replace(os.sep, "/")}"\n' + text)
         return m.load_config(path)
 
@@ -85,7 +85,7 @@ spec = "glm-5.3"
 ''')
         r = m.resolve_all(cfg, SETTINGS)["oc"]
         self.assertEqual(r["session"], ("custom:OC-GLM-5.3-Flash-7", "high"))
-        # mesmo nome de modelo na Z.AI nao pode ser confundido
+        # the same model name on Z.AI must not be confused
         self.assertEqual(r["spec"], ("custom:OC-GLM-5.3-6", None))
 
     def test_missing_custom_model_is_error(self):
@@ -102,15 +102,15 @@ validator = "kimi-k3@high"
 
     def test_validation_errors(self):
         cases = {
-            'x = 1': "nenhum",
+            'x = 1': "no \\[\\[fallback",
             'home_pool = "gold"\n[[fallback]]\nname = "a"\nsession = "a"': "home_pool",
-            '[[fallback]]\nsession = "a"': "sem name",
-            '[[fallback]]\nname = "home"\nsession = "a"': "reservado",
-            '[[fallback]]\nname = "a"\nsession = "a"\n[[fallback]]\nname = "a"\nsession = "b"': "repetido",
-            '[[fallback]]\nname = "a"\npool = "gold"\nsession = "a"': "pool deve ser",
-            '[[fallback]]\nname = "a"\nprovider = "nope"\nsession = "a"': "nao esta em",
-            '[[fallback]]\nname = "a"\nsesion = "a"': "desconhecidos",
-            '[[fallback]]\nname = "a"': "nenhum papel",
+            '[[fallback]]\nsession = "a"': "has no name",
+            '[[fallback]]\nname = "home"\nsession = "a"': "reserved",
+            '[[fallback]]\nname = "a"\nsession = "a"\n[[fallback]]\nname = "a"\nsession = "b"': "duplicated",
+            '[[fallback]]\nname = "a"\npool = "gold"\nsession = "a"': "pool must be",
+            '[[fallback]]\nname = "a"\nprovider = "nope"\nsession = "a"': "is not in",
+            '[[fallback]]\nname = "a"\nsesion = "a"': "unknown fields",
+            '[[fallback]]\nname = "a"': "defines no role",
         }
         for text, msg in cases.items():
             with self.subTest(text=text), self.assertRaisesRegex(m.ConfigError, msg):
@@ -175,7 +175,7 @@ class CycleTest(Base):
         if os.name == "posix":
             self.assertEqual(os.stat(self.settings_path).st_mode & 0o777, 0o600)
 
-        # Trocar de fallback nao pode sobrescrever a copia dos padroes.
+        # Switching between fallbacks must not overwrite the saved defaults.
         d = m.Droid(cfg)
         self.assertEqual(d.current(), "droid")
         self.assertTrue(d.go("oc"))
@@ -183,7 +183,7 @@ class CycleTest(Base):
 
         d = m.Droid(cfg)
         self.assertEqual(d.current(), "oc")
-        self.assertEqual(m.home_pool(cfg, d.home), "standard")  # vem da copia, nao do settings
+        self.assertEqual(m.home_pool(cfg, d.home), "standard")  # comes from the saved copy, not the settings
         self.assertTrue(d.go("home"))
         self.assertFalse(os.path.exists(m.HOME_FILE))
         self.assertEqual(m.load_settings(self.settings_path), original)
@@ -200,8 +200,8 @@ class CycleTest(Base):
         m.set_roles(d.s, d.fallbacks["oc"])
         self.write_settings(d.s)
         d = m.Droid(cfg)
-        self.assertEqual(d.current(), "home (coincide com o fallback oc)")
-        with self.assertRaisesRegex(m.ConfigError, "padroes guardados"):
+        self.assertEqual(d.current(), "home (matches fallback oc)")
+        with self.assertRaisesRegex(m.ConfigError, "no defaults are saved"):
             d.go("droid")
         self.assertFalse(os.path.exists(m.HOME_FILE))
 
@@ -241,7 +241,7 @@ class ValidateLimitsTest(unittest.TestCase):
         data = {"limits": {"standard": {"fiveHour": {"usedPercent": 0}, "weekly": bucket(100)},
                            "core": {"weekly": bucket(40)}}, "overagePreference": None}
         self.assertEqual(m.validate_limits(data)["standard"]["weekly"]["usedPercent"], 100)
-        # conta sem Droid Core
+        # account without Droid Core
         m.validate_limits({"limits": {"standard": {"weekly": bucket(10)}}})
 
     def test_rejects_shapes_that_would_look_like_free_limits(self):

@@ -77,7 +77,7 @@ class TuiFlowTest(unittest.TestCase):
                 await pilot.pause()
                 models = scr.query_one("#m-session", Select)
                 self.assertIn("glm-5.3-flash", [v for _, v in models._options])
-                # claude-opus-5-5 esta no settings, mas e Standard: nao entra no pool core
+                # claude-opus-5-5 is in the settings, but it's Standard: not offered for the core pool
                 self.assertNotIn("claude-opus-5-5", [v for _, v in models._options])
                 await pilot.click("#extra")
                 await pilot.press(*"deepseek-v4.1-flash", "enter")
@@ -86,7 +86,7 @@ class TuiFlowTest(unittest.TestCase):
                 scr.query_one("#m-validator", Select).value = "deepseek-v4.1-flash"
                 scr.query_one("#e-validator", Select).value = "high"
                 await pilot.pause()
-                # a escolha feita antes de digitar o ID extra sobrevive ao refresh
+                # the choice made before typing the extra ID survives the refresh
                 self.assertEqual(scr.query_one("#m-session", Select).value, "glm-5.3-flash")
                 await pilot.press("ctrl+s")
                 await pilot.pause()
@@ -112,7 +112,7 @@ class TuiFlowTest(unittest.TestCase):
             await pilot.pause()
             ol = app.screen.query_one("#list", OptionList)
             ol.focus()
-            ol.highlighted = 1  # 0 = URL personalizada
+            ol.highlighted = 1  # 0 = custom URL
             await pilot.press("enter")
             self.assertIsInstance(app.screen, KeyScreen)
             app.screen.query_one("#key", Input).value = "oc-key"
@@ -124,7 +124,7 @@ class TuiFlowTest(unittest.TestCase):
             await pilot.pause()
             sl = app.screen.query_one("#list", SelectionList)
             self.assertEqual(sl.option_count, 3)
-            # filtra, marca um, limpa o filtro e marca outro: a selecao sobrevive ao filtro
+            # filter, check one, clear the filter and check another: the selection survives filtering
             app.screen.query_one("#search", Input).value = "flash"
             await pilot.pause()
             sl.focus()
@@ -200,13 +200,13 @@ class StatusPanelTest(unittest.TestCase):
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 tier = str(app.screen.query_one("#tier", Static).render())
-                self.assertIn("Degrau atual: home", tier)
-                self.assertIn("Pelos limites: droid", tier)
-                self.assertIn("troca para droid", tier)
+                self.assertIn("Current tier: home", tier)
+                self.assertIn("From the limits: droid", tier)
+                self.assertIn("switches to droid", tier)
                 limits = str(app.screen.query_one("#limits", Static).render())
-                self.assertIn("semanal", limits)
+                self.assertIn("weekly", limits)
                 self.assertIn("100%", limits)
-                self.assertIn("vira em 4d 6h", limits)
+                self.assertIn("resets in 4d 6h", limits)
 
                 await choose(app, pilot, "pin")
                 self.assertIsInstance(app.screen, PickTier)
@@ -215,7 +215,7 @@ class StatusPanelTest(unittest.TestCase):
                 await pilot.pause()
                 self.assertEqual(self.model(), "custom:OC-glm-5.3-flash-0")
                 self.assertEqual(core.read_pin(), "oc")
-                self.assertIn("fixado em oc", str(app.screen.query_one("#tier", Static).render()))
+                self.assertIn("pinned to oc", str(app.screen.query_one("#tier", Static).render()))
                 self.assertIsNotNone(app.screen.query_one("#menu", OptionList).get_option("unpin"))
 
                 await choose(app, pilot, "restore")
@@ -233,7 +233,7 @@ class StatusPanelTest(unittest.TestCase):
         self.assertEqual(until("2026-09-30T12:12:00Z", now), "12min")
         self.assertEqual(until("2026-09-30T14:13:00Z", now), "2h13")
         self.assertEqual(until("2026-10-04T18:00:00Z", now), "4d 6h")
-        self.assertEqual(until("2026-09-30T11:00:00Z", now), "virou")
+        self.assertEqual(until("2026-09-30T11:00:00Z", now), "reset")
         self.assertEqual(until(None, now), "")
 
 

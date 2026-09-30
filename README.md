@@ -2,8 +2,6 @@
 
 [![tests](https://github.com/soaresfellipe/droid-tier/actions/workflows/tests.yml/badge.svg)](https://github.com/soaresfellipe/droid-tier/actions/workflows/tests.yml)
 
-**English** · [Português](README.pt-BR.md)
-
 Automatically switches the models used by [Droid](https://factory.ai) (Factory)
 when your subscription's usage limits run out.
 
@@ -20,8 +18,6 @@ window resets, it restores exactly what was there.
 ```
 your defaults  ->  Droid Core (GLM, DeepSeek...)  ->  external provider (OpenCode Go, OpenRouter...)
 ```
-
-> The interface and program messages are in Brazilian Portuguese for now.
 
 ## Install
 

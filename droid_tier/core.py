@@ -1,6 +1,6 @@
-"""Nucleo do droid-tier: config, limites da Factory e escrita no settings do Droid.
+"""droid-tier core: config, Factory limits and writes to Droid's settings.
 
-Sem dependencias fora da biblioteca padrao, para o timer rodar leve.
+Standard library only, so the scheduled run stays light.
 """
 import datetime as dt
 import json
@@ -15,11 +15,11 @@ HOME = os.path.expanduser("~")
 
 
 def app_dir(xdg_var, unix_default):
-    """Pasta do droid-tier: XDG se definido, senao dentro do perfil do usuario.
+    """droid-tier folder: XDG when set, otherwise inside the user profile.
 
-    No Windows tambem fica fora de AppData de proposito: o Python da Microsoft Store
-    redireciona gravacoes em AppData para uma pasta privada do pacote, e o config
-    sumiria para o Explorer e para os outros programas."""
+    On Windows it also stays out of AppData on purpose: the Microsoft Store Python
+    redirects writes under AppData to a private package folder, so the config
+    would be invisible to Explorer and to other programs."""
     return os.path.join(os.environ.get(xdg_var) or os.path.join(HOME, *unix_default), "droid-tier")
 
 
@@ -36,10 +36,10 @@ DEFAULT_API = "https://app.factory.ai"
 HOME_TIER = "home"
 POOLS = ("standard", "core")
 WINDOWS = ("fiveHour", "weekly", "monthly")
-# Prefixos dos modelos nativos que a Factory cobra no pool Droid Core.
+# Prefixes of the native models Factory bills to the Droid Core pool.
 CORE_PREFIXES = ("glm-", "deepseek-", "kimi-", "minimax-", "qwen", "nemotron-")
 
-# papel no config.toml -> (secao do settings.json, campo do modelo, campo do esforco)
+# role in config.toml -> (settings.json section, model field, effort field)
 ROLES = {
     "session": ("sessionDefaultSettings", "model", "reasoningEffort"),
     "spec": ("sessionDefaultSettings", "specModeModel", "specModeReasoningEffort"),
@@ -52,33 +52,33 @@ ROLES = {
 }
 
 EXAMPLE_CONFIG = '''\
-# droid-tier: fallbacks para quando os limites da Factory acabam.
+# droid-tier: fallbacks for when your Factory limits run out.
 #
-# Os seus padroes do Droid (o que estiver no settings.json) nao entram aqui.
-# Ao sair deles, o droid-tier guarda uma copia e restaura quando o limite libera.
+# Your Droid defaults (whatever is in settings.json) don't go here.
+# When leaving them, droid-tier saves a copy and restores it once the limit frees up.
 
-# Troca quando qualquer janela (5h, semanal, mensal) passa deste %.
+# Switch when any window (5h, weekly, monthly) goes over this %.
 threshold = 95
 
-# Pool que os seus padroes consomem: "standard", "core" ou "none".
-# Sem esta linha, e deduzido pelos modelos (Claude/GPT/Gemini = standard,
+# Pool your defaults use: "standard", "core" or "none".
+# Without this line it's inferred from the models (Claude/GPT/Gemini = standard,
 # GLM/DeepSeek/Kimi/MiniMax/Qwen/Nemotron = core, custom: = none).
 # home_pool = "standard"
 
-# Providers de fallback. Cada modelo usado com `provider = "..."` precisa existir
-# em customModels no ~/.factory/settings.json com este baseUrl.
+# Fallback providers. Every model used with `provider = "..."` must exist in
+# customModels in ~/.factory/settings.json with this baseUrl.
 [providers.opencode-go]
 base_url = "https://opencode.ai/zen/go/v1"
 
-# Fallbacks em ordem. Vale o primeiro com folga; um fallback sem `pool` esta
-# sempre disponivel, entao deixe-o por ultimo.
-# Papeis: session, spec, subagent_light, subagent_medium, subagent_heavy,
-# orchestrator, worker, validator. Papel omitido fica como esta.
-# Formato: "modelo" ou "modelo@esforco".
+# Fallbacks in order. The first one with room wins; a fallback without `pool`
+# is always available, so put it last.
+# Roles: session, spec, subagent_light, subagent_medium, subagent_heavy,
+# orchestrator, worker, validator. Roles left out are not changed.
+# Format: "model" or "model@effort".
 
 [[fallback]]
 name = "droid"
-pool = "core"       # modelos open source da Factory (Droid Core)
+pool = "core"       # Factory's open-weight models (Droid Core)
 session = "glm-5.3-flash@high"
 spec = "glm-5.3@high"
 subagent_light = "glm-5.3-flash@low"
@@ -90,7 +90,7 @@ validator = "deepseek-v4.1-flash@high"
 
 [[fallback]]
 name = "oc"
-provider = "opencode-go"   # os mesmos modelos, via customModels
+provider = "opencode-go"   # the same models, through customModels
 session = "glm-5.3-flash@high"
 spec = "glm-5.3@high"
 subagent_light = "glm-5.3-flash@low"
@@ -100,11 +100,11 @@ orchestrator = "glm-5.3@low"
 worker = "glm-5.3-flash@high"
 validator = "deepseek-v4.1-flash@high"
 
-# Avisos quando o degrau muda ou a API da Factory para de responder.
+# Notifications when the tier changes or Factory's API stops responding.
 # [notify]
-# desktop = true                          # toast no Windows, notify-send no Linux
-# ntfy = "https://ntfy.sh/seu-topico"     # notificacao no celular pelo app ntfy
-# webhook = "https://exemplo/webhook"     # POST JSON (n8n, Slack via proxy...)
+# desktop = true                          # toast on Windows, notify-send on Linux
+# ntfy = "https://ntfy.sh/your-topic"     # phone notification through the ntfy app
+# webhook = "https://example/webhook"     # JSON POST (n8n, Slack through a proxy...)
 '''
 
 
@@ -112,7 +112,7 @@ class ConfigError(Exception):
     pass
 
 
-ECHO = True  # a TUI desliga: print no meio do Textual bagunca a tela
+ECHO = True  # the TUI turns this off: printing in the middle of Textual garbles the screen
 
 
 def log(msg):
@@ -132,39 +132,39 @@ def load_config(path=None):
         with open(path, "rb") as f:
             cfg = tomllib.load(f)
     except FileNotFoundError:
-        raise ConfigError(f"{path} nao existe; rode `droid-tier init`")
+        raise ConfigError(f"{path} does not exist; run `droid-tier init`")
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}")
 
     fallbacks = cfg.get("fallback") or []
     if not fallbacks:
-        raise ConfigError("nenhum [[fallback]] definido")
+        raise ConfigError("no [[fallback]] defined")
     providers = cfg.get("providers") or {}
     home_pool = cfg.get("home_pool")
     if home_pool not in (None, "none", *POOLS):
-        raise ConfigError("home_pool deve ser standard, core ou none")
+        raise ConfigError("home_pool must be standard, core or none")
     seen = {HOME_TIER}
     for i, t in enumerate(fallbacks, 1):
         name = t.get("name")
         if not name:
-            raise ConfigError(f"[[fallback]] #{i} sem name")
+            raise ConfigError(f"[[fallback]] #{i} has no name")
         if name in seen:
-            raise ConfigError(f"fallback {name!r} repetido ou reservado")
+            raise ConfigError(f"fallback {name!r} is duplicated or reserved")
         seen.add(name)
         if t.get("pool") not in (None, *POOLS):
-            raise ConfigError(f"fallback {name!r}: pool deve ser {' ou '.join(POOLS)}")
+            raise ConfigError(f"fallback {name!r}: pool must be {' or '.join(POOLS)}")
         if t.get("pool") and t.get("provider"):
-            raise ConfigError(f"fallback {name!r}: use pool (Factory) ou provider, nao os dois")
+            raise ConfigError(f"fallback {name!r}: use pool (Factory) or provider, not both")
         if t.get("provider") and t["provider"] not in providers:
-            raise ConfigError(f"fallback {name!r}: provider {t['provider']!r} nao esta em [providers]")
+            raise ConfigError(f"fallback {name!r}: provider {t['provider']!r} is not in [providers]")
         unknown = set(t) - {"name", "pool", "provider", *ROLES}
         if unknown:
-            raise ConfigError(f"fallback {name!r}: campos desconhecidos {sorted(unknown)}")
+            raise ConfigError(f"fallback {name!r}: unknown fields {sorted(unknown)}")
         if not set(t) & set(ROLES):
-            raise ConfigError(f"fallback {name!r} nao define nenhum papel")
+            raise ConfigError(f"fallback {name!r} defines no role")
     for pname, p in providers.items():
         if not p.get("base_url"):
-            raise ConfigError(f"provider {pname!r} sem base_url")
+            raise ConfigError(f"provider {pname!r} has no base_url")
     return {
         "threshold": float(cfg.get("threshold", 95)),
         "settings": os.path.expanduser(cfg.get("settings", DEFAULT_SETTINGS)),
@@ -177,7 +177,7 @@ def load_config(path=None):
 
 
 def _validate_notify(section):
-    from . import notify  # notify importa core
+    from . import notify  # notify imports core
     return notify.validate(section)
 
 
@@ -186,7 +186,7 @@ def norm_url(u):
 
 
 def resolve_fallback(fb, cfg, settings):
-    """Fallback do config -> {papel: (id do modelo no Droid, esforco ou None)}."""
+    """Config fallback -> {role: (Droid model id, effort or None)}."""
     provider = cfg["providers"].get(fb.get("provider")) if fb.get("provider") else None
     out = {}
     for role in ROLES:
@@ -204,8 +204,8 @@ def custom_model_id(settings, base_url, model, name):
     found = [m for m in settings.get("customModels") or []
              if norm_url(m.get("baseUrl")) == norm_url(base_url) and m.get("model") == model]
     if not found:
-        raise ConfigError(f"fallback {name!r}: nenhum customModel com model={model!r} "
-                          f"e baseUrl={base_url!r} no settings.json do Droid")
+        raise ConfigError(f"fallback {name!r}: no customModel with model={model!r} "
+                          f"and baseUrl={base_url!r} in Droid's settings.json")
     return found[0]["id"]
 
 
@@ -214,7 +214,7 @@ def resolve_all(cfg, settings):
 
 
 def infer_pool(roles):
-    """Pool que um conjunto de papeis consome; None se so usa customModels."""
+    """Pool a set of roles uses; None if it only uses customModels."""
     native = [m for m, _ in roles.values() if m and not m.startswith("custom:")]
     if not native:
         return None
@@ -229,7 +229,7 @@ def home_pool(cfg, home):
     return infer_pool(home)
 
 
-# ---------------------------------------------------------------- limites
+# ---------------------------------------------------------------- limits
 
 def api_key():
     key = os.environ.get("FACTORY_API_KEY")
@@ -242,11 +242,11 @@ def api_key():
                     return line.split("=", 1)[1].strip().strip("'\"")
     except FileNotFoundError:
         pass
-    raise ConfigError(f"sem FACTORY_API_KEY (nem no ambiente, nem em {KEY_FILE})")
+    raise ConfigError(f"no FACTORY_API_KEY (neither in the environment nor in {KEY_FILE})")
 
 
 def fetch_limits(cfg):
-    # Endpoint nao documentado, o mesmo que o CLI do Droid consulta.
+    # Undocumented endpoint, the same one Droid's CLI calls.
     req = urllib.request.Request(cfg["api"] + "/api/billing/limits", headers={
         "Authorization": f"Bearer {api_key()}",
         "Accept": "application/json",
@@ -257,26 +257,26 @@ def fetch_limits(cfg):
 
 
 def validate_limits(data):
-    """Recusa resposta fora do formato esperado.
+    """Reject responses that aren't in the expected shape.
 
-    Sem isso, uma mudanca no endpoint (nao documentado) viraria "nenhum limite
-    estourado" e o droid-tier restauraria padroes que estao sem limite. O proprio
-    Droid trata limits.standard ausente como falha."""
+    Otherwise a change in the (undocumented) endpoint would read as "no limit
+    exceeded" and droid-tier would restore defaults that are out of quota. Droid
+    itself treats a missing limits.standard as a failure."""
     limits = data.get("limits") if isinstance(data, dict) else None
     if not isinstance(limits, dict):
-        raise ValueError("resposta sem `limits`; o formato da API da Factory mudou?")
+        raise ValueError("response has no `limits`; did Factory's API change?")
     for pool in POOLS:
         p = limits.get(pool)
         if p is None and pool == "core":
-            continue  # conta sem Droid Core
+            continue  # account without Droid Core
         if not isinstance(p, dict) or not any(
                 isinstance((p.get(w) or {}).get("usedPercent"), (int, float)) for w in WINDOWS):
-            raise ValueError(f"resposta sem `limits.{pool}` com usedPercent; o formato da API da Factory mudou?")
+            raise ValueError(f"response has no `limits.{pool}` with usedPercent; did Factory's API change?")
     return limits
 
 
 def pool_hits(pool, threshold, now=None):
-    """Janelas ativas do pool que passaram do limiar, como 'weekly 97%'."""
+    """Active windows of the pool that went over the threshold, like 'weekly 97%'."""
     if not pool:
         return []
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -288,14 +288,14 @@ def pool_hits(pool, threshold, now=None):
             continue
         end = b.get("windowEnd")
         if end and dt.datetime.fromisoformat(end.replace("Z", "+00:00")) <= now:
-            continue  # janela ja virou, o numero e velho
+            continue  # the window already reset; the number is stale
         hits.append(f"{name} {pct:.0f}%")
     return hits
 
 
 def pick_tier(cfg, limits, hpool, now=None):
-    """'home' se o pool dos padroes tem folga; senao o primeiro fallback com folga,
-    ou o ultimo se todos estourados. Devolve (nome, motivos)."""
+    """'home' if the defaults' pool has room; otherwise the first fallback with
+    room, or the last one if all are exhausted. Returns (name, reasons)."""
     hits = {p: pool_hits(limits.get(p), cfg["threshold"], now) for p in POOLS}
     if not hpool or not hits[hpool]:
         return HOME_TIER, hits
@@ -313,9 +313,9 @@ def describe(limits):
         for name in WINDOWS:
             b = p.get(name) or {}
             if "usedPercent" in b:
-                end = f" (vira {b['windowEnd']})" if b.get("windowEnd") else ""
+                end = f" (resets {b['windowEnd']})" if b.get("windowEnd") else ""
                 parts.append(f"{name} {b['usedPercent']:.0f}%{end}")
-        out.append(f"  {pool}: " + (", ".join(parts) if parts else "sem dados"))
+        out.append(f"  {pool}: " + (", ".join(parts) if parts else "no data"))
     return "\n".join(out)
 
 
@@ -327,13 +327,13 @@ def load_settings(path):
 
 
 def write_settings(path, s):
-    # Escrita atomica no mesmo diretorio, mantendo 0600 (o arquivo tem chaves de API).
+    # Atomic write in the same folder, keeping 0600 (the file holds API keys).
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".settings.droid-tier.")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(s, f, indent=2, ensure_ascii=False)
         f.write("\n")
     os.chmod(tmp, 0o600)
-    # No Windows a troca falha se o Droid estiver lendo o arquivo naquele instante.
+    # On Windows the replace fails if Droid happens to be reading the file.
     for attempt in range(5):
         try:
             os.replace(tmp, path)
@@ -361,7 +361,7 @@ def matches(s, profile):
 
 
 def set_roles(s, profile, exact=False):
-    """Grava os papeis. exact=True (restaurar padroes) tambem apaga o que nao existia."""
+    """Write the roles. exact=True (restoring defaults) also removes what didn't exist."""
     for role, (model, effort) in profile.items():
         section, mk, ek = ROLES[role]
         d = s.setdefault(section, {}) if section else s
@@ -371,10 +371,10 @@ def set_roles(s, profile, exact=False):
             elif exact:
                 d.pop(key, None)
         if exact and section and not d:
-            s.pop(section)  # secao criada por um fallback
+            s.pop(section)  # section created by a fallback
 
 
-# ---------------------------------------------------------------- estado
+# ---------------------------------------------------------------- state
 
 def read_pin():
     try:
@@ -385,7 +385,7 @@ def read_pin():
 
 
 def read_home():
-    """Padroes guardados ao sair deles; None quando o Droid esta nos padroes."""
+    """Defaults saved when leaving them; None while Droid is on its defaults."""
     try:
         with open(HOME_FILE, encoding="utf-8") as f:
             data = json.load(f)
@@ -402,7 +402,7 @@ def save_home(roles):
 
 
 class Droid:
-    """Settings do Droid + fallbacks resolvidos + padroes guardados."""
+    """Droid settings + resolved fallbacks + saved defaults."""
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -414,8 +414,8 @@ class Droid:
     def current(self):
         if self.saved_home is None:
             name = self.on_fallback()
-            return f"home (coincide com o fallback {name})" if name else HOME_TIER
-        return self.on_fallback() or "misto"
+            return f"home (matches fallback {name})" if name else HOME_TIER
+        return self.on_fallback() or "mixed"
 
     def on_fallback(self):
         for name, profile in self.fallbacks.items():
@@ -424,7 +424,7 @@ class Droid:
         return None
 
     def go(self, tier):
-        """Leva o settings ao degrau. Devolve True se escreveu."""
+        """Bring the settings to the tier. Returns True if it wrote."""
         if tier == HOME_TIER:
             if self.saved_home is None:
                 return False
@@ -436,10 +436,10 @@ class Droid:
         profile = self.fallbacks[tier]
         if self.saved_home is None:
             if self.on_fallback():
-                # Sem copia dos padroes e o settings ja esta num fallback: guardar
-                # agora gravaria o fallback como se fosse o padrao da pessoa.
-                raise ConfigError("o settings ja esta num fallback e nao ha padroes guardados; "
-                                  "configure seus padroes no Droid ou grave home.json")
+                # No saved defaults and the settings are already on a fallback:
+                # saving now would record the fallback as the user's defaults.
+                raise ConfigError("the settings are already on a fallback and no defaults are saved; "
+                                  "set your defaults in Droid or write home.json")
             save_home(self.home)
             self.saved_home = self.home
         if matches(self.s, profile):
@@ -449,10 +449,10 @@ class Droid:
         return True
 
 
-# ---------------------------------------------------------------- acoes (CLI e TUI)
+# ---------------------------------------------------------------- actions (CLI and TUI)
 
 class LimitsError(Exception):
-    """A API da Factory nao respondeu; nada deve ser alterado."""
+    """Factory's API didn't respond; nothing should change."""
 
 
 def tier_names(cfg):
@@ -472,19 +472,19 @@ def clear_pin():
 
 def pin(cfg, name):
     if name not in tier_names(cfg):
-        raise ConfigError(f"degrau {name!r} nao existe; opcoes: {', '.join(tier_names(cfg))}")
+        raise ConfigError(f"tier {name!r} does not exist; options: {', '.join(tier_names(cfg))}")
     d = Droid(cfg)
     before = d.current()
     changed = d.go(name)
     write_pin(name)
-    msg = f"pin {name} (antes: {before})" + ("" if changed else ", nada a mudar")
+    msg = f"pin {name} (was: {before})" + ("" if changed else ", nothing to change")
     log(msg)
     return msg
 
 
 def unpin():
     clear_pin()
-    msg = "unpin, o timer volta a decidir"
+    msg = "unpin, the schedule decides again"
     log(msg)
     return msg
 
@@ -494,13 +494,13 @@ def restore(cfg):
     before = d.current()
     changed = d.go(HOME_TIER)
     clear_pin()
-    msg = f"restore: {before} -> home" if changed else "restore: ja nos padroes"
+    msg = f"restore: {before} -> home" if changed else "restore: already on defaults"
     log(msg)
     return msg
 
 
 def status(cfg):
-    """Estado atual + decisao pelos limites. Levanta LimitsError sem rede."""
+    """Current state + decision from the limits. Raises LimitsError without network."""
     d = Droid(cfg)
     try:
         limits = fetch_limits(cfg)
@@ -513,25 +513,25 @@ def status(cfg):
 
 
 def run(cfg):
-    """Aplica o degrau que os limites indicam. Devolve a mensagem do log, ou None se nada mudou."""
+    """Apply the tier the limits call for. Returns the log message, or None if nothing changed."""
     d = Droid(cfg)
     before = d.current()
     from . import notify
     try:
         st = status(cfg)
     except LimitsError as e:
-        # Sem resposta confiavel, nao mexe: melhor ficar no degrau atual do que chutar.
-        log(f"falha ao consultar limites: {e}; mantendo {before}")
-        if not os.path.exists(api_error_file()):  # avisa so quando comeca, nao a cada rodada
+        # No reliable answer, so don't touch anything: better to stay put than to guess.
+        log(f"failed to fetch limits: {e}; staying on {before}")
+        if not os.path.exists(api_error_file()):  # notify when it starts, not every run
             os.makedirs(STATE_DIR, exist_ok=True)
             open(api_error_file(), "w").close()
-            notify.send(cfg, "droid-tier: sem acesso aos limites",
-                        f"A API da Factory falhou ({e}). O Droid fica em {before} até ela voltar.",
+            notify.send(cfg, "droid-tier: can't read limits",
+                        f"Factory's API failed ({e}). Droid stays on {before} until it's back.",
                         {"event": "api_error", "tier": before})
         raise
     if os.path.exists(api_error_file()):
         os.remove(api_error_file())
-        notify.send(cfg, "droid-tier: limites de volta", "A API da Factory voltou a responder.",
+        notify.send(cfg, "droid-tier: limits are back", "Factory's API is responding again.",
                     {"event": "api_ok", "tier": before})
     if st["pin"]:
         return None
@@ -539,17 +539,17 @@ def run(cfg):
     if not d.go(tier):
         return None
     why = "; ".join(f"{p} {', '.join(h)}" for p, h in hits.items() if h)
-    msg = f"{before} -> {tier} ({'limites liberados' if tier == HOME_TIER else why})"
+    msg = f"{before} -> {tier} ({'limits freed up' if tier == HOME_TIER else why})"
     log(msg)
     if tier == HOME_TIER:
-        text = "Limites liberados. O Droid voltou para os seus padrões."
+        text = "Limits freed up. Droid is back on your defaults."
     else:
-        text = f"Limite da Factory: {why}. Sessões novas do Droid usam o fallback {tier}."
+        text = f"Factory limit: {why}. New Droid sessions use the {tier} fallback."
     notify.send(cfg, f"droid-tier: {before} → {tier}", text,
                 {"event": "tier_changed", "from": before, "to": tier, "reason": why})
     return msg
 
 
 def api_error_file():
-    # Calculado na hora: STATE_DIR pode ser trocado (XDG, testes).
+    # Computed on use: STATE_DIR can change (XDG, tests).
     return os.path.join(STATE_DIR, "api-error")

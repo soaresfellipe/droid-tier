@@ -1,10 +1,10 @@
-"""Catalogo de providers e modelos, e sincronizacao com customModels do Droid.
+"""Provider and model catalog, and syncing with Droid's customModels.
 
-Fontes:
-- models.dev: lista de providers, base URL e metadados dos modelos (contexto,
-  saida, imagem). Cache local de 24h.
-- GET <base_url>/models do provider: quais modelos a key realmente acessa.
-- `droid exec --help`: modelos nativos da Factory.
+Sources:
+- models.dev: provider list, base URLs and model metadata (context, output,
+  image support). Cached locally for 24h.
+- GET <base_url>/models on the provider: which models the key can actually use.
+- `droid exec --help`: Factory's native models.
 """
 import json
 import os
@@ -26,7 +26,7 @@ CACHE_TTL = 24 * 3600
 DROID_KINDS = ("generic-chat-completion-api", "openai", "anthropic")
 EFFORTS = ("off", "none", "minimal", "low", "medium", "high", "xhigh", "max")
 
-# Providers do models.dev sem `api` (usam o endpoint oficial do SDK).
+# models.dev providers without `api` (they use the SDK's official endpoint).
 BASE_URL_OVERRIDES = {
     "openai": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com",
@@ -34,7 +34,7 @@ BASE_URL_OVERRIDES = {
 
 
 def _session_header(model):
-    # Mantem a mesma sessao no OpenCode, o que aumenta o cache hit.
+    # Keeps the same OpenCode session, which raises the cache hit rate.
     return {"x-opencode-session": f"droid-tier-{model}"}
 
 
@@ -57,7 +57,7 @@ class Model:
     context: int | None = None
     output: int | None = None
     image: bool | None = None
-    live: bool | None = None  # True: veio do /models do provider
+    live: bool | None = None  # True: came from the provider's /models
     reasoning: bool | None = None
 
     @property
@@ -70,7 +70,7 @@ class NativeModel:
     id: str
     name: str
     deprecated: bool = False
-    efforts: list = field(default_factory=list)  # vazio = desconhecido
+    efforts: list = field(default_factory=list)  # empty = unknown
     pool: str = field(init=False)
 
     def __post_init__(self):
@@ -89,7 +89,7 @@ def load_models_dev(refresh=False, timeout=30):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.load(r)
     except (urllib.error.URLError, OSError, ValueError):
-        if os.path.exists(MODELS_DEV_CACHE):  # velho, mas melhor que nada
+        if os.path.exists(MODELS_DEV_CACHE):  # stale, but better than nothing
             with open(MODELS_DEV_CACHE, encoding="utf-8") as f:
                 return json.load(f)
         raise
@@ -127,10 +127,10 @@ def md_models(md, provider_id):
     return out
 
 
-# ---------------------------------------------------------------- provider ao vivo
+# ---------------------------------------------------------------- live provider
 
 def fetch_live_models(base_url, api_key, kind, timeout=20):
-    """IDs de GET <base>/models, ou None se o provider nao responder."""
+    """IDs from GET <base>/models, or None if the provider doesn't answer."""
     url = base_url.rstrip("/") + ("/v1/models" if kind == "anthropic" and not base_url.rstrip("/").endswith("/v1")
                                   else "/models")
     headers = {"Accept": "application/json", "User-Agent": "droid-tier"}
@@ -150,9 +150,9 @@ def fetch_live_models(base_url, api_key, kind, timeout=20):
 
 
 def list_models(provider, api_key, md):
-    """Modelos do provider: lista ao vivo quando da, metadados do models.dev.
+    """Provider models: the live list when available, metadata from models.dev.
 
-    Devolve (modelos, veio_ao_vivo)."""
+    Returns (models, came_from_live_list)."""
     meta = md_models(md, provider.id)
     live = fetch_live_models(provider.base_url, api_key, provider.kind) if api_key else None
     if live is None:
@@ -165,10 +165,10 @@ def list_models(provider, api_key, md):
     return sorted(out, key=lambda m: m.id), True
 
 
-# ---------------------------------------------------------------- modelos nativos
+# ---------------------------------------------------------------- native models
 
 def native_models(droid_bin=None):
-    """Modelos nativos da Factory, lidos do `droid exec --help`."""
+    """Factory's native models, read from `droid exec --help`."""
     droid_bin = droid_bin or shutil.which("droid")
     if not droid_bin:
         return []
@@ -182,7 +182,7 @@ def native_models(droid_bin=None):
 
 def parse_native_models(help_text):
     models, section = [], None
-    efforts = {}  # nome de exibicao -> esforcos, do bloco "Model details"
+    efforts = {}  # display name -> efforts, from the "Model details" block
     for line in help_text.splitlines():
         stripped = line.strip()
         if stripped in ("Available Models:", "Model details:", "Custom Models:"):
@@ -207,13 +207,13 @@ def parse_native_models(help_text):
     return models
 
 
-# Sem modelo nativo equivalente, o Droid aceita estes esforcos num customModel
-# que tenha reasoningEffort; sem reasoningEffort, o raciocinio fica desligado.
+# Without a matching native model, Droid accepts these efforts on a customModel
+# that has reasoningEffort; without reasoningEffort, reasoning is turned off.
 CUSTOM_EFFORTS = ["off", "low", "medium", "high"]
 
 
 def efforts_for(model_id, natives, entry=None):
-    """Esforcos que o Droid aceita para um modelo; None = desconhecido (oferecer todos)."""
+    """Efforts Droid accepts for a model; None = unknown (offer them all)."""
     native = next((n for n in natives if n.id == model_id), None)
     if entry is not None:
         base = entry.get("baseModelId") or entry.get("model")
@@ -222,8 +222,8 @@ def efforts_for(model_id, natives, entry=None):
             configured = entry.get("reasoningEffort")
             if configured and configured != "none":
                 return CUSTOM_EFFORTS + ([configured] if configured not in CUSTOM_EFFORTS else [])
-            # O `droid exec --help` omite nativos que existem (ex.: deepseek-v4.1-flash);
-            # so da para afirmar "sem raciocinio" quando o nome nao pode ser de um nativo.
+            # `droid exec --help` leaves out natives that exist (e.g. deepseek-v4.1-flash);
+            # "no reasoning" is only certain when the name can't be a native one.
             return ["none"] if "/" in base else None
     if native is not None and native.efforts:
         return native.efforts
@@ -233,7 +233,7 @@ def efforts_for(model_id, natives, entry=None):
 # ---------------------------------------------------------------- customModels
 
 def normalize_display(name):
-    # Igual ao Droid: trim + espacos viram "-".
+    # Same as Droid: trim, and whitespace becomes "-".
     return re.sub(r"\s+", "-", name.strip())
 
 
@@ -252,8 +252,8 @@ def custom_entry(provider, model, api_key, prefix):
     if model.image is not None:
         entry["noImageSupport"] = not model.image
     if model.reasoning:
-        # Sem isso, um modelo que nao tem o mesmo nome de um nativo da Factory
-        # (ex.: z-ai/glm-5.3 no OpenRouter) roda com o raciocinio desligado.
+        # Without it, a model not named like a Factory native
+        # (e.g. z-ai/glm-5.3 on OpenRouter) runs with reasoning turned off.
         entry["reasoningEffort"] = "high"
     headers = EXTRA_HEADERS.get(provider.id)
     if headers:
@@ -273,11 +273,11 @@ def provider_api_key(settings, base_url):
 
 
 def sync_custom_models(settings, provider, selected, api_key, prefix, managed):
-    """Deixa em customModels exatamente os `selected` deste provider.
+    """Leave exactly the `selected` models of this provider in customModels.
 
-    Remove so entradas que o droid-tier cadastrou antes (`managed`); as que a
-    pessoa pos a mao ficam. Entradas existentes mantem o id, para nao quebrar
-    referencias no settings. Devolve (adicionados, removidos)."""
+    Only removes entries droid-tier added before (`managed`); the ones added by
+    hand stay. Existing entries keep their id, so references in the settings
+    don't break. Returns (added, removed)."""
     models = settings.setdefault("customModels", [])
     wanted = {m.id: m for m in selected}
     base = core.norm_url(provider.base_url)
@@ -308,7 +308,7 @@ def sync_custom_models(settings, provider, selected, api_key, prefix, managed):
 
 
 def in_use(settings, home, ids):
-    """Quais ids de customModels estao em uso pelos padroes ou pelo settings atual."""
+    """Which customModel ids are used by the defaults or the current settings."""
     used = {model for model, _ in core.snapshot(settings).values()}
     if home:
         used |= {model for model, _ in home.values()}
