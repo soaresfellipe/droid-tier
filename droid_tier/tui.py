@@ -1,4 +1,5 @@
 """Textual interface to add providers, pick models and build fallbacks."""
+import copy
 import datetime as dt
 import os
 import shutil
@@ -860,6 +861,7 @@ class DroidTierApp(App):
         super().__init__()
         self.state = State(config_path)
         self.quitting = False
+        self.terminal_attrs = None  # real terminal attributes, set on quit
 
     def on_mount(self):
         self.push_screen(MainScreen())
@@ -876,6 +878,17 @@ class DroidTierApp(App):
         if self.quitting:
             return
         self.quitting = True
+        # Textual restores the terminal from attrs_before on exit, which turns echo
+        # back on before run() returns; a report arriving then would be echoed.
+        # Restore without echo instead; run_tui puts the real attributes back.
+        saved = getattr(self._driver, "attrs_before", None)
+        if saved and os.name != "nt":
+            import termios
+            self.terminal_attrs = copy.deepcopy(saved)
+            quiet = copy.deepcopy(saved)
+            quiet[3] &= ~(termios.ECHO | termios.ICANON)
+            quiet[6][termios.VMIN], quiet[6][termios.VTIME] = 0, 0
+            self._driver.attrs_before = quiet
         disable = getattr(self._driver, "_disable_mouse_support", None)
         if disable:
             try:
@@ -888,7 +901,7 @@ class DroidTierApp(App):
 QUIT_GRACE = 0.5  # seconds Textual keeps reading after mouse reporting is turned off
 
 
-def discard_pending_input(quiet=0.25, limit=1.5):
+def discard_pending_input(quiet=0.25, limit=1.5, restore=None):
     """Discard input that still reaches the terminal after Textual exits.
 
     Mouse reports already in flight (e.g. ^[[<35;11;22M) would otherwise be
@@ -910,7 +923,7 @@ def discard_pending_input(quiet=0.25, limit=1.5):
         import select
         import termios
         fd = sys.stdin.fileno()
-        saved = termios.tcgetattr(fd)
+        saved = restore or termios.tcgetattr(fd)
         raw = termios.tcgetattr(fd)
         raw[3] &= ~(termios.ECHO | termios.ICANON)
         raw[6][termios.VMIN], raw[6][termios.VTIME] = 0, 0
@@ -929,7 +942,8 @@ def discard_pending_input(quiet=0.25, limit=1.5):
 
 def run_tui(config_path=None):
     core.ECHO = False
+    app = DroidTierApp(config_path)
     try:
-        DroidTierApp(config_path).run()
+        app.run()
     finally:
-        discard_pending_input()
+        discard_pending_input(restore=app.terminal_attrs)
