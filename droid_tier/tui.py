@@ -329,7 +329,7 @@ class MainScreen(Screen):
         elif oid == "fallbacks":
             self.app.push_screen(FallbacksScreen())
         else:
-            self.app.exit()
+            self.app.quit_gracefully()
 
 
 # ---------------------------------------------------------------- providers
@@ -859,26 +859,70 @@ class DroidTierApp(App):
     def __init__(self, config_path=None):
         super().__init__()
         self.state = State(config_path)
+        self.quitting = False
 
     def on_mount(self):
         self.push_screen(MainScreen())
 
+    async def action_quit(self):
+        self.quit_gracefully()
 
-def discard_pending_input(wait=0.3):
-    """Discard whatever reached the terminal after Textual stopped reading.
+    def quit_gracefully(self):
+        """Turn mouse reporting off, keep reading input for a moment, then exit.
 
-    Textual turns mouse tracking off on exit, but reports the terminal had
-    already sent (e.g. ^[[<35;11;22M) are still in flight, especially over
-    SSH, and would land in the shell as text."""
-    time.sleep(wait)
+        Over SSH the terminal keeps sending mouse reports until it receives the
+        "stop" sequence. While Textual is still running they're consumed as
+        events; after it exits they would be echoed into the shell."""
+        if self.quitting:
+            return
+        self.quitting = True
+        disable = getattr(self._driver, "_disable_mouse_support", None)
+        if disable:
+            try:
+                disable()
+            except Exception:
+                pass
+        self.set_timer(QUIT_GRACE, self.exit)
+
+
+QUIT_GRACE = 0.5  # seconds Textual keeps reading after mouse reporting is turned off
+
+
+def discard_pending_input(quiet=0.25, limit=1.5):
+    """Discard input that still reaches the terminal after Textual exits.
+
+    Mouse reports already in flight (e.g. ^[[<35;11;22M) would otherwise be
+    echoed on screen as they arrive and then read by the shell. Echo stays off
+    while draining, until the input has been quiet for `quiet` seconds."""
     try:
         if os.name == "nt":
             import msvcrt
-            while msvcrt.kbhit():
-                msvcrt.getwch()
-        elif sys.stdin.isatty():
-            import termios
-            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+            deadline, last = time.monotonic() + limit, time.monotonic()
+            while time.monotonic() < deadline and time.monotonic() - last < quiet:
+                if msvcrt.kbhit():
+                    msvcrt.getwch()
+                    last = time.monotonic()
+                else:
+                    time.sleep(0.02)
+            return
+        if not sys.stdin.isatty():
+            return
+        import select
+        import termios
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        raw = termios.tcgetattr(fd)
+        raw[3] &= ~(termios.ECHO | termios.ICANON)
+        raw[6][termios.VMIN], raw[6][termios.VTIME] = 0, 0
+        termios.tcsetattr(fd, termios.TCSANOW, raw)
+        try:
+            deadline, last = time.monotonic() + limit, time.monotonic()
+            while time.monotonic() < deadline and time.monotonic() - last < quiet:
+                if select.select([fd], [], [], 0.02)[0] and os.read(fd, 4096):
+                    last = time.monotonic()
+        finally:
+            termios.tcflush(fd, termios.TCIFLUSH)
+            termios.tcsetattr(fd, termios.TCSANOW, saved)
     except (OSError, ValueError):
         pass
 
