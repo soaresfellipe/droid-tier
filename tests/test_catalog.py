@@ -71,6 +71,8 @@ class EffortsTest(unittest.TestCase):
         self.assertEqual(catalog.efforts_for("z-ai/glm-5.3", n, {"model": "z-ai/glm-5.3"}), ["none"])
         self.assertEqual(catalog.efforts_for("z-ai/glm-5.3", n, {"model": "z-ai/glm-5.3", "reasoningEffort": "high"}),
                          ["off", "low", "medium", "high"])
+        # nome que pode ser de um nativo omitido pelo --help: desconhecido, nao "none"
+        self.assertIsNone(catalog.efforts_for("deepseek-v4.1-flash", n, {"model": "deepseek-v4.1-flash"}))
         self.assertEqual(catalog.efforts_for("x", n, {"model": "x", "reasoningEffort": "max"}),
                          ["off", "low", "medium", "high", "max"])
         self.assertEqual(catalog.efforts_for("x", n, {"model": "x", "baseModelId": "glm-5.3-flash"}),

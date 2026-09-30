@@ -220,9 +220,11 @@ def efforts_for(model_id, natives, entry=None):
         native = next((n for n in natives if n.id == base), None)
         if native is None:
             configured = entry.get("reasoningEffort")
-            if not configured or configured == "none":
-                return ["none"]
-            return CUSTOM_EFFORTS + ([configured] if configured not in CUSTOM_EFFORTS else [])
+            if configured and configured != "none":
+                return CUSTOM_EFFORTS + ([configured] if configured not in CUSTOM_EFFORTS else [])
+            # O `droid exec --help` omite nativos que existem (ex.: deepseek-v4.1-flash);
+            # so da para afirmar "sem raciocinio" quando o nome nao pode ser de um nativo.
+            return ["none"] if "/" in base else None
     if native is not None and native.efforts:
         return native.efforts
     return None
