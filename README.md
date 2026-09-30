@@ -123,8 +123,25 @@ desktop = true
 ntfy = "https://ntfy.sh/your-topic"
 ```
 
-The first fallback whose pool still has room wins; a fallback without `pool` is
-always available, so put it last.
+The first fallback that still has room wins. You can chain as many as you like,
+each from a Factory pool or from one of your providers (e.g. Droid Core →
+OpenCode Go → OpenRouter).
+
+### Fallback provider quotas
+
+A fallback with `provider` is skipped when that provider's quota goes over the
+threshold. droid-tier reads the quota of:
+
+| Provider | Source | Exhausted when |
+|---|---|---|
+| OpenCode Go | `GET /zen/go/v1/usage` (undocumented) | a window (5h, weekly, monthly) goes over the threshold or isn't `ok` |
+| OpenRouter | `GET /api/v1/key` | the key has a credit limit and its usage goes over the threshold |
+| DeepSeek | `GET /user/balance` | `is_available` is false |
+
+Other providers count as always available. If a quota can't be read, the
+provider also counts as available (logged once), since skipping to a worse
+fallback because of a failed request would be worse than staying put. The home
+screen and `droid-tier status` show these quotas next to Factory's.
 
 Roles: `session`, `spec`, `subagent_light`, `subagent_medium`, `subagent_heavy`,
 `orchestrator`, `worker`, `validator`. Roles you leave out are not changed. The

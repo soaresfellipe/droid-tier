@@ -70,8 +70,9 @@ threshold = 95
 [providers.opencode-go]
 base_url = "https://opencode.ai/zen/go/v1"
 
-# Fallbacks in order. The first one with room wins; a fallback without `pool`
-# is always available, so put it last.
+# Fallbacks in order. The first one with room wins. A fallback with `provider`
+# is skipped when that provider's quota is exhausted (OpenCode Go, OpenRouter
+# and DeepSeek are tracked; other providers count as always available).
 # Roles: session, spec, subagent_light, subagent_medium, subagent_heavy,
 # orchestrator, worker, validator. Roles left out are not changed.
 # Format: "model" or "model@effort".
@@ -275,13 +276,13 @@ def validate_limits(data):
     return limits
 
 
-def pool_hits(pool, threshold, now=None):
+def pool_hits(pool, threshold, now=None, names=WINDOWS):
     """Active windows of the pool that went over the threshold, like 'weekly 97%'."""
     if not pool:
         return []
     now = now or dt.datetime.now(dt.timezone.utc)
     hits = []
-    for name in WINDOWS:
+    for name in names:
         b = pool.get(name) or {}
         pct = b.get("usedPercent")
         if pct is None or pct < threshold:
@@ -293,14 +294,23 @@ def pool_hits(pool, threshold, now=None):
     return hits
 
 
-def pick_tier(cfg, limits, hpool, now=None):
+def pick_tier(cfg, limits, hpool, now=None, provider_hits=None):
     """'home' if the defaults' pool has room; otherwise the first fallback with
-    room, or the last one if all are exhausted. Returns (name, reasons)."""
+    room, or the last one if all are exhausted. Returns (name, reasons).
+
+    provider_hits: {provider_id: [reasons]} for external providers whose quota
+    is known; a provider missing from it counts as available."""
     hits = {p: pool_hits(limits.get(p), cfg["threshold"], now) for p in POOLS}
+    provider_hits = provider_hits or {}
     if not hpool or not hits[hpool]:
         return HOME_TIER, hits
     for fb in cfg["fallbacks"]:
-        if not fb.get("pool") or not hits[fb["pool"]]:
+        if fb.get("pool"):
+            if not hits[fb["pool"]]:
+                return fb["name"], hits
+        elif fb.get("provider") and provider_hits.get(fb["provider"]):
+            hits[fb["provider"]] = provider_hits[fb["provider"]]
+        else:
             return fb["name"], hits
     return cfg["fallbacks"][-1]["name"], hits
 
@@ -501,15 +511,18 @@ def restore(cfg):
 
 def status(cfg):
     """Current state + decision from the limits. Raises LimitsError without network."""
+    from . import quotas
     d = Droid(cfg)
     try:
         limits = fetch_limits(cfg)
     except (urllib.error.URLError, OSError, ValueError) as e:
         raise LimitsError(str(e)) from e
     hp = home_pool(cfg, d.home)
-    tier, hits = pick_tier(cfg, limits, hp)
+    provider_quotas = quotas.check(cfg, d.s)
+    provider_hits = {pid: quotas.hits(w, cfg["threshold"]) for pid, w in provider_quotas.items()}
+    tier, hits = pick_tier(cfg, limits, hp, provider_hits=provider_hits)
     return {"droid": d, "current": d.current(), "pin": read_pin(), "limits": limits,
-            "home_pool": hp, "tier": tier, "hits": hits}
+            "home_pool": hp, "tier": tier, "hits": hits, "quotas": provider_quotas}
 
 
 def run(cfg):
@@ -533,6 +546,10 @@ def run(cfg):
         os.remove(api_error_file())
         notify.send(cfg, "droid-tier: limits are back", "Factory's API is responding again.",
                     {"event": "api_ok", "tier": before})
+    for pid, windows in (st["quotas"] or {}).items():
+        failed = bool(windows and "error" in windows)
+        if _flag(f"quota-error-{pid}", failed) and failed:
+            log(f"couldn't read the {pid} quota ({windows['error']}); treating it as available")
     if st["pin"]:
         return None
     tier, hits = st["tier"], st["hits"]
@@ -553,3 +570,34 @@ def run(cfg):
 def api_error_file():
     # Computed on use: STATE_DIR can change (XDG, tests).
     return os.path.join(STATE_DIR, "api-error")
+
+
+def _flag(name, on):
+    """Keep a marker file in sync with `on`. Returns True when it changed."""
+    path = os.path.join(STATE_DIR, name)
+    if on == os.path.exists(path):
+        return False
+    if on:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        open(path, "w").close()
+    else:
+        os.remove(path)
+    return True
+
+
+def describe_quotas(provider_quotas):
+    out = []
+    for pid, windows in (provider_quotas or {}).items():
+        if windows is None:
+            out.append(f"  {pid}: quota not tracked (no adapter), treated as available")
+        elif "error" in windows:
+            out.append(f"  {pid}: couldn't read the quota ({windows['error']}), treated as available")
+        elif not windows:
+            out.append(f"  {pid}: no limit on this key")
+        else:
+            parts = []
+            for name, w in windows.items():
+                end = f" (resets {w['windowEnd']})" if w.get("windowEnd") else ""
+                parts.append(f"{name} {w['usedPercent']:.0f}%{end}")
+            out.append(f"  {pid}: " + ", ".join(parts))
+    return "\n".join(out)

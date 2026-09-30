@@ -168,11 +168,11 @@ def until(end, now=None):
     return f"{days}d {hours}h"
 
 
-WINDOW_LABELS = {"fiveHour": "5 hours", "weekly": "weekly", "monthly": "monthly"}
+WINDOW_LABELS = {"fiveHour": "5 hours", "rolling": "5 hours", "weekly": "weekly", "monthly": "monthly"}
 POOL_LABELS = {"standard": "Standard (Claude, GPT, Gemini)", "core": "Droid Core (GLM, DeepSeek...)"}
 
 
-def render_limits(limits, threshold, now=None):
+def render_limits(limits, threshold, now=None, quotas=None):
     out = Text()
     for i, pool in enumerate(core.POOLS):
         out.append(("\n" if i else "") + POOL_LABELS[pool] + "\n", style="bold")
@@ -187,6 +187,26 @@ def render_limits(limits, threshold, now=None):
             out.append(f"  {WINDOW_LABELS[w]:<8} ")
             out.append(bar(b["usedPercent"], threshold))
             out.append(f" {b['usedPercent']:>3.0f}%")
+            if left:
+                out.append(f"  resets in {left}", style="dim")
+            out.append("\n")
+    for pid, windows in (quotas or {}).items():
+        out.append(f"\n{pid} (fallback provider)\n", style="bold")
+        if windows is None:
+            out.append("  quota not tracked for this provider; treated as available\n", style="dim")
+        elif "error" in windows:
+            out.append(f"  couldn't read the quota ({windows['error']}); treated as available\n", style="yellow")
+        elif not windows:
+            out.append("  no limit on this key\n", style="dim")
+        for name, w in (windows or {}).items():
+            if name == "error":
+                continue
+            left = until(w.get("windowEnd"), now)
+            out.append(f"  {WINDOW_LABELS.get(name, name):<8} ")
+            out.append(bar(w["usedPercent"], threshold))
+            out.append(f" {w['usedPercent']:>3.0f}%")
+            if w.get("status", "ok") != "ok":
+                out.append(f"  {w['status']}", style="red")
             if left:
                 out.append(f"  resets in {left}", style="dim")
             out.append("\n")
@@ -276,7 +296,7 @@ class MainScreen(Screen):
         if not st["pin"] and st["current"] != st["tier"]:
             t.append(f"\nThe schedule switches to {st['tier']} on its next run; or use Apply now.", style="yellow")
         tier_w.update(t)
-        limits_w.update(render_limits(st["limits"], st["threshold"]))
+        limits_w.update(render_limits(st["limits"], st["threshold"], quotas=st.get("quotas")))
         self.build_menu()
 
     def act(self, fn):

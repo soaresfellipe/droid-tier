@@ -95,6 +95,8 @@ def cmd_status(_):
     print(f"tier from limits (threshold {cfg['threshold']:.0f}%, defaults on the "
           f"{st['home_pool'] or 'no'} pool): {st['tier']}")
     print(describe(st["limits"]))
+    if st["quotas"]:
+        print(core.describe_quotas(st["quotas"]))
 
 
 def cmd_run(_):
