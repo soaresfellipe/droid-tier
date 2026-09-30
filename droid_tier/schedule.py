@@ -123,13 +123,18 @@ def unit_dir():
 
 
 def service_unit(python):
+    # systemd expands % specifiers and splits ExecStart on spaces: double the %
+    # and quote paths with spaces so an interpreter under e.g. "Program Files" works.
+    quoted = python.replace("%", "%%")
+    if " " in quoted or "\t" in quoted:
+        quoted = f'"{quoted}"'
     return f"""[Unit]
 Description=Switches Droid's models according to Factory's limits
 After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart={python} -m droid_tier run
+ExecStart={quoted} -m droid_tier run
 """
 
 
