@@ -9,6 +9,7 @@ import tempfile
 import time
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 
 HOME = os.path.expanduser("~")
@@ -104,13 +105,29 @@ validator = "deepseek-v4.1-flash@high"
 # Notifications when the tier changes or Factory's API stops responding.
 # [notify]
 # desktop = true                          # toast on Windows, notify-send on Linux
-# ntfy = "https://ntfy.sh/your-topic"     # phone notification through the ntfy app
+# ntfy = "https://ntfy.sh/your-topic"     # phone notification through the ntfy app.
+#                                         # Anyone who knows the topic can read it: make it long and random.
 # webhook = "https://example/webhook"     # JSON POST (n8n, Slack through a proxy...)
+#                                         # URLs must be https, except localhost (local n8n).
 '''
 
 
 class ConfigError(Exception):
     pass
+
+
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def check_url(url, what):
+    """Reject plain http for anything that carries API keys or messages.
+
+    https is required; http is only accepted for loopback (local n8n, Ollama,
+    test servers), where the traffic never leaves the machine."""
+    u = urllib.parse.urlparse(url or "")
+    if u.scheme == "https" or (u.scheme == "http" and (u.hostname or "").lower() in LOOPBACK_HOSTS):
+        return url
+    raise ConfigError(f"{what} must be an https:// URL (plain http only for localhost), got {url!r}")
 
 
 ECHO = True  # the TUI turns this off: printing in the middle of Textual garbles the screen
@@ -166,10 +183,11 @@ def load_config(path=None):
     for pname, p in providers.items():
         if not p.get("base_url"):
             raise ConfigError(f"provider {pname!r} has no base_url")
+        check_url(p["base_url"], f"provider {pname!r} base_url")  # the API key goes there
     return {
         "threshold": float(cfg.get("threshold", 95)),
         "settings": os.path.expanduser(cfg.get("settings", DEFAULT_SETTINGS)),
-        "api": cfg.get("factory_api", DEFAULT_API).rstrip("/"),
+        "api": check_url(cfg.get("factory_api", DEFAULT_API), "factory_api").rstrip("/"),
         "home_pool": home_pool,
         "providers": providers,
         "fallbacks": fallbacks,

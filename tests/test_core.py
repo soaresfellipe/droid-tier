@@ -117,6 +117,22 @@ validator = "kimi-k3@high"
                 self.config(text)
 
 
+class UrlTest(Base):
+    """API keys and messages must not travel over plain http (except localhost)."""
+
+    def test_factory_api_must_be_https(self):
+        with self.assertRaisesRegex(m.ConfigError, "https"):
+            self.config('factory_api = "http://app.factory.ai"\n[[fallback]]\nname = "a"\nsession = "a"')
+        cfg = self.config('factory_api = "http://localhost:8080"\n[[fallback]]\nname = "a"\nsession = "a"')
+        self.assertEqual(cfg["api"], "http://localhost:8080")
+
+    def test_provider_base_url_must_be_https(self):
+        head = '[providers.oc]\nbase_url = "%s"\n[[fallback]]\nname = "oc"\nprovider = "oc"\nsession = "a"'
+        with self.assertRaisesRegex(m.ConfigError, "https"):
+            self.config(head % "http://opencode.ai/zen/go/v1")
+        self.config(head % "http://127.0.0.1:11434/v1")  # loopback: local Ollama/vLLM stays allowed
+
+
 class PoolTest(unittest.TestCase):
     def test_infer_pool(self):
         self.assertEqual(m.infer_pool({"a": ("claude-opus-5-5", None), "b": ("glm-5.3", None)}), "standard")

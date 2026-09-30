@@ -25,8 +25,11 @@ def validate(section):
         raise core.ConfigError(f"[notify]: unknown fields {sorted(unknown)}")
     for key in ("ntfy", "webhook"):
         url = section.get(key)
-        if url is not None and not (isinstance(url, str) and url.startswith(("http://", "https://"))):
+        if url is None:
+            continue
+        if not (isinstance(url, str) and url.startswith(("http://", "https://"))):
             raise core.ConfigError(f"[notify] {key} must be an http(s) URL")
+        core.check_url(url, f"[notify] {key}")  # messages may leak tier names; no plain http
     return section
 
 

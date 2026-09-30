@@ -57,6 +57,15 @@ class ChannelsTest(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaisesRegex(core.ConfigError, msg):
                 notify.validate(bad)
 
+    def test_validate_rejects_plain_http_outside_localhost(self):
+        # self.url is loopback http: local webhooks stay allowed.
+        self.assertEqual(notify.validate({"webhook": self.url + "/hook"}),
+                         {"webhook": self.url + "/hook"})
+        with self.assertRaisesRegex(core.ConfigError, "https"):
+            notify.validate({"ntfy": "http://ntfy.sh/topic"})
+        with self.assertRaisesRegex(core.ConfigError, "https"):
+            notify.validate({"webhook": "http://example.com/hook"})
+
 
 class RunNotifiesTest(Base):
     def setUp(self):
