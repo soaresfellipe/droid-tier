@@ -22,8 +22,9 @@ import urllib.request
 
 HOME = os.path.expanduser("~")
 SETTINGS = os.path.join(HOME, ".factory", "settings.json")
-KEY_FILE = os.path.join(HOME, ".config", "amicatek", "factory-api-key.env")
-STATE_DIR = os.path.join(HOME, ".local", "state", "droid-tier")
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "droid-tier")
+KEY_FILE = os.path.join(CONFIG_DIR, "factory-api-key.env")
+STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local", "state"), "droid-tier")
 PIN_FILE = os.path.join(STATE_DIR, "pin")
 LOG_FILE = os.path.join(STATE_DIR, "log")
 API = os.environ.get("FACTORY_BASE_URL", "https://app.factory.ai") + "/api/billing/limits"

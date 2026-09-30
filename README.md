@@ -28,7 +28,7 @@ droid-tier unpin         devolve o controle ao timer
 ```
 
 Precisa de uma API key da Factory (app.factory.ai/settings/api-keys) em
-`~/.config/amicatek/factory-api-key.env` ou na variável `FACTORY_API_KEY`
+`~/.config/droid-tier/factory-api-key.env` ou na variável `FACTORY_API_KEY`
 só do processo do droid-tier. Não exporte no shell: o Droid passaria a usar a key
 no lugar do seu login.
 
