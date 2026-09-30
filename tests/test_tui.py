@@ -23,6 +23,13 @@ async def choose(app, pilot, option_id, widget="#menu"):
     await pilot.pause()
 
 
+class UntilTest(unittest.TestCase):
+    def test_malformed_or_missing_end_shows_nothing(self):
+        now = dt.datetime(2026, 9, 30, 12, 0, tzinfo=dt.timezone.utc)
+        self.assertEqual(until("not-a-date", now), "")
+        self.assertEqual(until(None), "")
+
+
 class TuiFlowTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()

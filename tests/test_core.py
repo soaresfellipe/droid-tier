@@ -139,6 +139,12 @@ class PoolTest(unittest.TestCase):
         self.assertEqual(m.infer_pool({"a": ("glm-5.3", "high"), "b": ("deepseek-v4.1-flash", None)}), "core")
         self.assertIsNone(m.infer_pool({"a": ("custom:OC-GLM-5.3-0", None), "b": (None, None)}))
 
+    def test_malformed_window_end_counts_as_hit(self):
+        # Must not crash the scheduled run, and must not read as "reset":
+        # restoring out-of-quota defaults is the worse mistake.
+        pool = {"weekly": {"usedPercent": 99, "windowEnd": "not-a-date"}}
+        self.assertEqual(m.pool_hits(pool, 95, now=NOW), ["weekly 99%"])
+
 
 class PickTest(Base):
     def pick(self, limits, hpool="standard"):

@@ -155,7 +155,10 @@ def until(end, now=None):
     if not end:
         return ""
     now = now or dt.datetime.now(dt.timezone.utc)
-    secs = (dt.datetime.fromisoformat(end.replace("Z", "+00:00")) - now).total_seconds()
+    try:
+        secs = (dt.datetime.fromisoformat(end.replace("Z", "+00:00")) - now).total_seconds()
+    except ValueError:
+        return ""  # malformed end from the API: show nothing instead of crashing the TUI
     if secs <= 0:
         return "reset"
     mins = int(secs // 60)
