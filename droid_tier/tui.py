@@ -2,8 +2,8 @@
 import copy
 import datetime as dt
 import os
-import shutil
 import sys
+import tempfile
 import time
 
 from rich.text import Text
@@ -70,7 +70,16 @@ class State:
 
     def save_settings(self):
         if not self.backed_up and os.path.exists(self.settings_path):
-            shutil.copy2(self.settings_path, self.settings_path + ".droid-tier.bak")
+            # The backup holds the API keys in plain text: create it 0600 instead
+            # of copying the (often world-readable) permissions of the original.
+            with open(self.settings_path, "rb") as src:
+                data = src.read()
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self.settings_path) or ".",
+                                       prefix=".settings.droid-tier.bak.")
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.settings_path + ".droid-tier.bak")
             self.backed_up = True
         core.write_settings(self.settings_path, self.settings)
 
@@ -471,8 +480,21 @@ class ProviderPickScreen(Screen):
     def pick(self, event):
         if event.option.id == CUSTOM:
             self.app.push_screen(KeyScreen(None))
+            return
+        prov = next(p for p in self.all if p.id == event.option.id)
+        saved = self.app.state.providers().get(prov.id) or {}
+        old = (saved.get("base_url") or "").rstrip("/")
+        if old and old != prov.base_url.rstrip("/"):
+            # models.dev is a third-party catalog: a changed URL may be a
+            # relocation — or a compromised entry about to receive the key.
+            def go(yes):
+                if yes:
+                    self.app.push_screen(KeyScreen(prov))
+
+            self.app.push_screen(Confirm(f"The {prov.id} base URL changed since you added it:\n\n"
+                                         f"old: {old}\nnew: {prov.base_url}\n\n"
+                                         "Your API key would be sent to the new URL. Continue?"), go)
         else:
-            prov = next(p for p in self.all if p.id == event.option.id)
             self.app.push_screen(KeyScreen(prov))
 
 
@@ -502,7 +524,9 @@ class KeyScreen(Screen):
                 yield Select([(k, k) for k in catalog.DROID_KINDS], value=catalog.DROID_KINDS[0],
                              allow_blank=False, id="kind")
             else:
-                yield Static(f"[b]{p.name}[/b]\n{p.base_url}\ntype: {p.kind}")
+                yield Static(f"[b]{p.name}[/b]\n"
+                             f"Your API key will be sent to: [b]{p.base_url}[/b]\n"
+                             f"type: {p.kind}")
             yield Label("API key")
             yield Input(value=key, password=True, id="key")
             yield Label("Name prefix in Droid's model picker (e.g. OC → \"OC GLM-5.3\")")
@@ -519,6 +543,11 @@ class KeyScreen(Screen):
             base = self.query_one("#base", Input).value.strip().rstrip("/")
             if not pid or not base.startswith("http"):
                 self.notify("Enter the ID and an http(s) base URL.", severity="error")
+                return
+            try:
+                core.check_url(base, "Base URL")  # the API key goes there
+            except core.ConfigError as e:
+                self.notify(str(e), severity="error")
                 return
             p = catalog.Provider(pid, self.query_one("#pname", Input).value.strip() or pid, base,
                                  self.query_one("#kind", Select).value)
