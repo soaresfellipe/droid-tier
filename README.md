@@ -19,7 +19,7 @@ seus padrões  ->  Droid Core (GLM, DeepSeek...)  ->  provider externo (OpenCode
 
 ## Instalação
 
-Requer Python 3.11+. Com [uv](https://docs.astral.sh/uv/) ou pipx:
+Funciona em Linux e Windows. Requer Python 3.11+. Com [uv](https://docs.astral.sh/uv/) ou pipx:
 
 ```sh
 uv tool install git+https://github.com/soaresfellipe/droid-tier
@@ -27,7 +27,8 @@ uv tool install git+https://github.com/soaresfellipe/droid-tier
 ```
 
 Crie uma API key da Factory em app.factory.ai/settings/api-keys e grave em
-`~/.config/droid-tier/factory-api-key.env` (permissão 600):
+`~/.config/droid-tier/factory-api-key.env` (no Windows,
+`%USERPROFILE%\.config\droid-tier\factory-api-key.env`):
 
 ```sh
 FACTORY_API_KEY=fk-...
@@ -41,12 +42,19 @@ Depois abra a interface para cadastrar providers e montar os fallbacks:
 droid-tier setup
 ```
 
-Para rodar a cada 5 minutos com systemd (Linux):
+Por fim, agende a verificação a cada 5 minutos:
 
 ```sh
-cp contrib/systemd/droid-tier.* ~/.config/systemd/user/
-systemctl --user enable --now droid-tier.timer
+droid-tier schedule install
 ```
+
+- **Linux:** cria e ativa `droid-tier.timer` no systemd do usuário. Para rodar sem
+  sessão aberta, `loginctl enable-linger`.
+- **Windows:** cria a Tarefa Agendada `droid-tier` (a cada 5 min e no logon, só com
+  a sessão aberta, também na bateria). Ela roda com `pythonw.exe`, então nenhuma
+  janela de console aparece.
+
+`droid-tier schedule status` mostra o agendamento; `droid-tier schedule uninstall` remove.
 
 ## Interface (`droid-tier setup`)
 
@@ -127,15 +135,23 @@ droid-tier run           consulta e aplica (usado pelo timer)
 droid-tier pin <degrau>  fixa um degrau ("home" = seus padrões)
 droid-tier unpin         devolve o controle ao timer
 droid-tier restore       restaura seus padrões agora e solta o pin
+droid-tier schedule      install | uninstall | status do agendamento
+droid-tier setup         abre a interface
 ```
 
 O histórico de trocas fica em `~/.local/state/droid-tier/log`.
 
+Os arquivos do droid-tier ficam no perfil do usuário também no Windows
+(`%USERPROFILE%\.config\droid-tier`, `%USERPROFILE%\.local\state\droid-tier`),
+e não em AppData: o Python da Microsoft Store redireciona gravações em AppData
+para uma pasta privada, e o config ficaria invisível para o Explorer.
+
 ## Desinstalar
 
 ```sh
-systemctl --user disable --now droid-tier.timer
+droid-tier schedule uninstall
 droid-tier restore
+uv tool uninstall droid-tier
 ```
 
 ## Aviso
@@ -148,7 +164,7 @@ o `droid-tier` não altera nada.
 
 - [x] Perfis e providers em arquivo de configuração, fora do código
 - [x] Interface para cadastrar providers, escolher modelos e montar fallbacks
-- [ ] Windows: Tarefa Agendada no lugar do timer do systemd
+- [x] Windows: Tarefa Agendada (`droid-tier schedule install`)
 - [ ] Ver limites e degrau atual na interface
 - [x] Testes com respostas de exemplo da API (`pytest`)
 

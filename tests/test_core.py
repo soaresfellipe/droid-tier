@@ -204,5 +204,33 @@ class CycleTest(Base):
         self.assertFalse(os.path.exists(m.HOME_FILE))
 
 
+
+
+class WriteRetryTest(Base):
+    def test_retries_when_file_is_locked(self):
+        from unittest import mock
+        real = os.replace
+        calls = []
+
+        def flaky(src, dst):
+            calls.append(dst)
+            if len(calls) < 3:
+                raise PermissionError("em uso")
+            real(src, dst)
+
+        with mock.patch.object(m.os, "replace", flaky), mock.patch.object(m.time, "sleep"):
+            m.write_settings(self.settings_path, {"ok": True})
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(m.load_settings(self.settings_path), {"ok": True})
+
+    def test_gives_up_and_cleans_temp(self):
+        from unittest import mock
+        with mock.patch.object(m.os, "replace", side_effect=PermissionError("em uso")), \
+                mock.patch.object(m.time, "sleep"), self.assertRaises(PermissionError):
+            m.write_settings(self.settings_path, {"ok": True})
+        leftovers = [f for f in os.listdir(self.dir.name) if f.startswith(".settings.droid-tier.")]
+        self.assertEqual(leftovers, [])
+
+
 if __name__ == "__main__":
     unittest.main()

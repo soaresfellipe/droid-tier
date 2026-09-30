@@ -7,15 +7,27 @@ import json
 import os
 import sys
 import tempfile
+import time
 import tomllib
 import urllib.error
 import urllib.request
 
 HOME = os.path.expanduser("~")
-CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "droid-tier")
+
+
+def app_dir(xdg_var, unix_default):
+    """Pasta do droid-tier: XDG se definido, senao dentro do perfil do usuario.
+
+    No Windows tambem fica fora de AppData de proposito: o Python da Microsoft Store
+    redireciona gravacoes em AppData para uma pasta privada do pacote, e o config
+    sumiria para o Explorer e para os outros programas."""
+    return os.path.join(os.environ.get(xdg_var) or os.path.join(HOME, *unix_default), "droid-tier")
+
+
+CONFIG_DIR = app_dir("XDG_CONFIG_HOME", (".config",))
 CONFIG_FILE = os.environ.get("DROID_TIER_CONFIG") or os.path.join(CONFIG_DIR, "config.toml")
 KEY_FILE = os.path.join(CONFIG_DIR, "factory-api-key.env")
-STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local", "state"), "droid-tier")
+STATE_DIR = app_dir("XDG_STATE_HOME", (".local", "state"))
 PIN_FILE = os.path.join(STATE_DIR, "pin")
 HOME_FILE = os.path.join(STATE_DIR, "home.json")
 LOG_FILE = os.path.join(STATE_DIR, "log")
@@ -287,7 +299,16 @@ def write_settings(path, s):
         json.dump(s, f, indent=2, ensure_ascii=False)
         f.write("\n")
     os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    # No Windows a troca falha se o Droid estiver lendo o arquivo naquele instante.
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 4:
+                os.remove(tmp)
+                raise
+            time.sleep(0.2 * (attempt + 1))
 
 
 def get_role(s, role):

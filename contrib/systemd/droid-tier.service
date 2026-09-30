@@ -1,7 +1,0 @@
-[Unit]
-Description=Troca os modelos do Droid conforme os limites da Factory
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=%h/.local/bin/droid-tier run

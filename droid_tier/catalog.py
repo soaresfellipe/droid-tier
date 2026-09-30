@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from . import core
 
 MODELS_DEV_URL = "https://models.dev/api.json"
-CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(core.HOME, ".cache"), "droid-tier")
+CACHE_DIR = os.path.join(core.app_dir("XDG_CACHE_HOME", (".cache",)), "cache")
 MODELS_DEV_CACHE = os.path.join(CACHE_DIR, "models.dev.json")
 CACHE_TTL = 24 * 3600
 

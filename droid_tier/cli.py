@@ -9,6 +9,8 @@ Uso:
   droid-tier pin <degrau>  aplica e fixa um degrau ("home" = seus padroes)
   droid-tier unpin         devolve o controle ao timer
   droid-tier restore       restaura seus padroes agora e solta o pin
+  droid-tier schedule [install|uninstall|status]
+                           roda o `run` a cada 5 min (systemd no Linux, Tarefa Agendada no Windows)
 """
 import os
 import sys
@@ -17,6 +19,14 @@ import urllib.error
 from .core import (CONFIG_FILE, EXAMPLE_CONFIG, HOME_FILE, HOME_TIER, PIN_FILE, STATE_DIR,
                    ConfigError, Droid, describe, fetch_limits, home_pool, load_config, log,
                    pick_tier, read_pin)
+
+
+def cmd_schedule(args):
+    from . import schedule
+    try:
+        schedule.main(args)
+    except schedule.ScheduleError as e:
+        sys.exit(f"erro: {e}")
 
 
 def cmd_setup(_):
@@ -112,6 +122,7 @@ def cmd_status_or_run(run):
 
 COMMANDS = {
     "setup": cmd_setup,
+    "schedule": cmd_schedule,
     "init": cmd_init,
     "check": cmd_check,
     "status": lambda a: cmd_status_or_run(False),
