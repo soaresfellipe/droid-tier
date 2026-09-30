@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""droid-tier: troca os modelos do Droid conforme os limites da Factory.
+
+Degraus, do melhor para o fallback:
+  standard -> Claude/GPT no pool Standard da Factory
+  droid    -> GLM/DeepSeek nativos no pool Droid Core da Factory
+  oc       -> os mesmos GLM/DeepSeek via OpenCode Go (customModels)
+
+Uso:
+  droid-tier status        mostra limites e degrau atual, nao altera nada
+  droid-tier run           consulta limites e aplica o degrau (usado pelo timer)
+  droid-tier pin <degrau>  aplica e fixa um degrau; o timer para de trocar
+  droid-tier unpin         devolve o controle ao timer
+"""
+import datetime as dt
+import json
+import os
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+
+HOME = os.path.expanduser("~")
+SETTINGS = os.path.join(HOME, ".factory", "settings.json")
+KEY_FILE = os.path.join(HOME, ".config", "amicatek", "factory-api-key.env")
+STATE_DIR = os.path.join(HOME, ".local", "state", "droid-tier")
+PIN_FILE = os.path.join(STATE_DIR, "pin")
+LOG_FILE = os.path.join(STATE_DIR, "log")
+API = os.environ.get("FACTORY_BASE_URL", "https://app.factory.ai") + "/api/billing/limits"
+# Troca de degrau quando qualquer janela ativa passa deste percentual.
+# Abaixo de 100 para nao descobrir o limite no meio de uma tarefa.
+THRESHOLD = float(os.environ.get("DROID_TIER_THRESHOLD", "95"))
+
+TIERS = ["standard", "droid", "oc"]
+
+# (sessao padrao, spec, subagentes light/medium/heavy, orquestrador, worker, validator)
+PROFILES = {
+    "standard": {
+        "session": ("gpt-6-luna", "high"),
+        "spec": ("claude-opus-5-5", "high"),
+        "light": ("gpt-6-luna", "medium"),
+        "medium": ("gpt-6-luna", "high"),
+        "heavy": ("claude-sonnet-5-5", "high"),
+        "orchestrator": ("claude-opus-5-5", "low"),
+        "worker": ("claude-sonnet-5-5", "medium"),
+        "validator": ("gpt-6-luna", "high"),
+    },
+    "droid": {
+        "session": ("glm-5.3-flash", "high"),
+        "spec": ("glm-5.3", "high"),
+        "light": ("glm-5.3-flash", "low"),
+        "medium": ("glm-5.3-flash", "high"),
+        "heavy": ("glm-5.3-flash", "max"),
+        "orchestrator": ("glm-5.3", "low"),
+        "worker": ("glm-5.3-flash", "high"),
+        "validator": ("deepseek-v4.1-flash", "high"),
+    },
+    "oc": {
+        "session": ("custom:OC-GLM-5.3-Flash-0", "high"),
+        "spec": ("custom:OC-GLM-5.3-0", "high"),
+        "light": ("custom:OC-GLM-5.3-Flash-0", "low"),
+        "medium": ("custom:OC-GLM-5.3-Flash-0", "high"),
+        "heavy": ("custom:OC-GLM-5.3-Flash-0", "max"),
+        "orchestrator": ("custom:OC-GLM-5.3-0", "low"),
+        "worker": ("custom:OC-GLM-5.3-Flash-0", "high"),
+        "validator": ("custom:OC-DeepSeek-V4.1-Flash-0", "high"),
+    },
+}
+
+# papel -> (secao do settings.json, campo do modelo, campo do esforco)
+FIELDS = {
+    "session": ("sessionDefaultSettings", "model", "reasoningEffort"),
+    "spec": ("sessionDefaultSettings", "specModeModel", "specModeReasoningEffort"),
+    "light": ("subagentModelSettings", "lightModel", "lightReasoningEffort"),
+    "medium": ("subagentModelSettings", "mediumModel", "mediumReasoningEffort"),
+    "heavy": ("subagentModelSettings", "heavyModel", "heavyReasoningEffort"),
+    "orchestrator": (None, "missionOrchestratorModel", "missionOrchestratorReasoningEffort"),
+    "worker": ("missionModelSettings", "workerModel", "workerReasoningEffort"),
+    "validator": ("missionModelSettings", "validationWorkerModel", "validationWorkerReasoningEffort"),
+}
+
+
+def log(msg):
+    line = f"{dt.datetime.now().astimezone():%Y-%m-%d %H:%M:%S%z} {msg}"
+    print(line)
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(LOG_FILE, "a") as f:
+        f.write(line + "\n")
+
+
+def api_key():
+    key = os.environ.get("FACTORY_API_KEY")
+    if key:
+        return key
+    try:
+        with open(KEY_FILE) as f:
+            for line in f:
+                if line.strip().startswith("FACTORY_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip("'\"")
+    except FileNotFoundError:
+        pass
+    sys.exit(f"sem FACTORY_API_KEY (nem no ambiente, nem em {KEY_FILE})")
+
+
+def fetch_limits():
+    req = urllib.request.Request(API, headers={
+        "Authorization": f"Bearer {api_key()}",
+        "Accept": "application/json",
+        "User-Agent": "droid-tier",
+    })
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.load(r)
+
+
+def pool_hits(pool):
+    """Janelas ativas do pool que passaram do limiar, como 'fiveHour 97%'."""
+    if not pool:
+        return []
+    now = dt.datetime.now(dt.timezone.utc)
+    hits = []
+    for name in ("fiveHour", "weekly", "monthly"):
+        b = pool.get(name) or {}
+        pct = b.get("usedPercent")
+        if pct is None or pct < THRESHOLD:
+            continue
+        end = b.get("windowEnd")
+        if end and dt.datetime.fromisoformat(end.replace("Z", "+00:00")) <= now:
+            continue  # janela ja virou, o numero e velho
+        hits.append(f"{name} {pct:.0f}%")
+    return hits
+
+
+def pick_tier(limits):
+    std, core = pool_hits(limits.get("standard")), pool_hits(limits.get("core"))
+    if not std:
+        return "standard", std, core
+    if not core:
+        return "droid", std, core
+    return "oc", std, core
+
+
+def describe(limits):
+    out = []
+    for pool in ("standard", "core"):
+        p = limits.get(pool) or {}
+        parts = []
+        for name in ("fiveHour", "weekly", "monthly"):
+            b = p.get(name) or {}
+            if "usedPercent" in b:
+                parts.append(f"{name} {b['usedPercent']:.0f}% (vira {b.get('windowEnd', '?')})")
+        out.append(f"  {pool}: " + (", ".join(parts) if parts else "sem dados"))
+    return "\n".join(out)
+
+
+def load_settings():
+    with open(SETTINGS) as f:
+        return json.load(f)
+
+
+def current_tier(s):
+    for tier, prof in PROFILES.items():
+        if all(get_role(s, role) == prof[role] for role in FIELDS):
+            return tier
+    return None  # misto / editado a mao
+
+
+def get_role(s, role):
+    section, mk, ek = FIELDS[role]
+    d = s.get(section, {}) if section else s
+    return (d.get(mk), d.get(ek))
+
+
+def apply(tier):
+    s = load_settings()
+    if current_tier(s) == tier:
+        return False
+    for role, (model, effort) in PROFILES[tier].items():
+        section, mk, ek = FIELDS[role]
+        d = s.setdefault(section, {}) if section else s
+        d[mk], d[ek] = model, effort
+    # Escrita atomica no mesmo diretorio, mantendo 0600 (o arquivo tem chaves de API).
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(SETTINGS), prefix=".settings.droid-tier.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(s, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, SETTINGS)
+    return True
+
+
+def read_pin():
+    try:
+        with open(PIN_FILE) as f:
+            return f.read().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
+    before = current_tier(load_settings()) or "misto"
+
+    if cmd == "pin":
+        tier = sys.argv[2] if len(sys.argv) > 2 else ""
+        if tier not in TIERS:
+            sys.exit(f"uso: droid-tier pin {{{'|'.join(TIERS)}}}")
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(PIN_FILE, "w") as f:
+            f.write(tier + "\n")
+        changed = apply(tier)
+        log(f"pin {tier} (antes: {before})" + ("" if changed else ", nada a mudar"))
+        return
+    if cmd == "unpin":
+        if os.path.exists(PIN_FILE):
+            os.remove(PIN_FILE)
+        log("unpin, o timer volta a decidir")
+        return
+    if cmd not in ("status", "run"):
+        sys.exit(__doc__)
+
+    pin = read_pin()
+    try:
+        limits = fetch_limits().get("limits") or {}
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        # Sem resposta confiavel, nao mexe: melhor ficar no degrau atual do que chutar.
+        log(f"falha ao consultar limites: {e}; mantendo {before}")
+        sys.exit(1)
+
+    tier, std, core = pick_tier(limits)
+    if cmd == "status":
+        print(f"degrau atual: {before}" + (f" (fixado em {pin})" if pin else ""))
+        print(f"degrau pelos limites (limiar {THRESHOLD:.0f}%): {tier}")
+        print(describe(limits))
+        return
+
+    if pin:
+        return
+    if apply(tier):
+        why = []
+        if std:
+            why.append("standard " + ", ".join(std))
+        if core:
+            why.append("droid " + ", ".join(core))
+        log(f"{before} -> {tier}" + (f" ({'; '.join(why)})" if why else " (limites liberados)"))
+
+
+if __name__ == "__main__":
+    main()

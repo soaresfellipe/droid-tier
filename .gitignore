@@ -1,0 +1,6 @@
+# Nunca versionar credenciais nem o settings do Droid (tem API keys em texto puro)
+*.env
+settings.json
+settings.json.*
+config.local.*
+__pycache__/
