@@ -210,6 +210,14 @@ The `/api/billing/limits` endpoint isn't documented by Factory. It was found in
 Droid's own CLI and may change without notice. If the request fails, or the
 response isn't in the expected shape, `droid-tier` changes nothing.
 
+## Ideas
+
+- **Local web interface**: a light page served on `127.0.0.1`, calling the same
+  core as the terminal interface. It edits Droid's settings (which hold API keys),
+  so it needs a random per-launch token in the URL and a `Host` header check
+  against CSRF and DNS rebinding. On a headless server, reach it through an SSH
+  tunnel, never on a network interface.
+
 ## Development
 
 ```sh
