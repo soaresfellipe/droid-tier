@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "droid-tier"
-version = "0.2.0"
+version = "0.3.0"
 description = "Troca automaticamente os modelos do Droid (Factory) quando os limites de uso acabam"
 readme = "README.md"
 license = "MIT"
