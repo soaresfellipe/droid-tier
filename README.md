@@ -58,6 +58,11 @@ droid-tier schedule install
 
 ## Interface (`droid-tier setup`)
 
+A tela inicial mostra o degrau atual, o degrau que os limites indicam e o uso de
+cada janela (5 horas, semanal, mensal) dos pools Standard e Droid Core, com o tempo
+até virar. Atualiza a cada minuto (`r` força). Dali dá para aplicar a decisão na
+hora, fixar um degrau, soltar o degrau fixado e restaurar seus padrões.
+
 1. **Providers e modelos**: escolha um provider do catálogo do
    [models.dev](https://models.dev) (OpenCode Go, OpenRouter, Z.AI, DeepSeek...) ou
    informe uma URL compatível com OpenAI/Anthropic, cole a API key e marque os
@@ -165,7 +170,7 @@ o `droid-tier` não altera nada.
 - [x] Perfis e providers em arquivo de configuração, fora do código
 - [x] Interface para cadastrar providers, escolher modelos e montar fallbacks
 - [x] Windows: Tarefa Agendada (`droid-tier schedule install`)
-- [ ] Ver limites e degrau atual na interface
+- [x] Limites, degrau atual e ações de degrau na interface
 - [x] Testes com respostas de exemplo da API (`pytest`)
 
 ## Licença

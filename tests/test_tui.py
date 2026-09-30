@@ -1,4 +1,5 @@
 import asyncio
+import datetime as dt
 import json
 import os
 import tempfile
@@ -7,11 +8,19 @@ from unittest import mock
 
 import droid_tier.core as core
 from droid_tier import catalog
-from droid_tier.tui import (DroidTierApp, FallbackEditScreen, FallbacksScreen, KeyScreen, MainScreen,
-                            ModelPickScreen, ProviderPickScreen, ProvidersScreen)
-from textual.widgets import Input, OptionList, Select, SelectionList
+from droid_tier.tui import (Confirm, DroidTierApp, FallbackEditScreen, FallbacksScreen, KeyScreen, MainScreen,
+                            ModelPickScreen, PickTier, ProviderPickScreen, ProvidersScreen, until)
+from textual.widgets import Input, OptionList, Select, SelectionList, Static
 
 from test_catalog import HELP, MD
+
+
+async def choose(app, pilot, option_id, widget="#menu"):
+    ol = app.screen.query_one(widget, OptionList)
+    ol.focus()
+    ol.highlighted = ol.get_option_index(option_id)
+    await pilot.press("enter")
+    await pilot.pause()
 
 
 class TuiFlowTest(unittest.TestCase):
@@ -92,7 +101,7 @@ class TuiFlowTest(unittest.TestCase):
         async with app.run_test(size=(120, 50)) as pilot:
             await pilot.pause()
             self.assertIsInstance(app.screen, MainScreen)
-            await pilot.press("enter")  # Providers e modelos
+            await choose(app, pilot, "providers")
             self.assertIsInstance(app.screen, ProvidersScreen)
             await pilot.press("enter")  # + Adicionar provider
             self.assertIsInstance(app.screen, ProviderPickScreen)
@@ -132,10 +141,7 @@ class TuiFlowTest(unittest.TestCase):
             self.assertIsInstance(app.screen, ProvidersScreen)
 
             await pilot.press("escape")
-            menu = app.screen.query_one("#menu", OptionList)
-            menu.focus()
-            menu.highlighted = 1
-            await pilot.press("enter")  # Fallbacks
+            await choose(app, pilot, "fallbacks")
             self.assertIsInstance(app.screen, FallbacksScreen)
             await pilot.press("enter")  # + Novo fallback
             self.assertIsInstance(app.screen, FallbackEditScreen)
@@ -152,6 +158,83 @@ class TuiFlowTest(unittest.TestCase):
             await pilot.press("ctrl+s")
             await pilot.pause()
             self.assertIsInstance(app.screen, FallbacksScreen)
+
+
+class StatusPanelTest(unittest.TestCase):
+    FUTURE = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=4, hours=6, minutes=30)).isoformat()
+    LIMITS = {"standard": {"fiveHour": {"usedPercent": 12, "windowEnd": FUTURE},
+                           "weekly": {"usedPercent": 100, "windowEnd": FUTURE}},
+              "core": {"weekly": {"usedPercent": 40, "windowEnd": FUTURE}}}
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.settings = os.path.join(self.dir.name, "settings.json")
+        with open(self.settings, "w") as f:
+            json.dump({"sessionDefaultSettings": {"model": "claude-opus-5-5", "reasoningEffort": "high"},
+                       "customModels": [
+                           {"model": m, "id": f"custom:OC-{m}-0", "baseUrl": "https://opencode.ai/zen/go/v1"}
+                           for m in ("glm-5.3", "glm-5.3-flash", "deepseek-v4.1-flash")]}, f)
+        self.config = os.path.join(self.dir.name, "config.toml")
+        with open(self.config, "w", encoding="utf-8") as f:
+            f.write(f'settings = "{self.settings.replace(os.sep, "/")}"\n' + core.EXAMPLE_CONFIG)
+        state = os.path.join(self.dir.name, "state")
+        patches = [mock.patch.object(core, "fetch_limits", return_value=self.LIMITS),
+                   mock.patch.object(core, "STATE_DIR", state),
+                   mock.patch.object(core, "PIN_FILE", os.path.join(state, "pin")),
+                   mock.patch.object(core, "HOME_FILE", os.path.join(state, "home.json")),
+                   mock.patch.object(core, "LOG_FILE", os.path.join(state, "log")),
+                   mock.patch.object(core, "ECHO", False)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def model(self):
+        with open(self.settings) as f:
+            return json.load(f)["sessionDefaultSettings"]["model"]
+
+    def test_panel_pin_and_restore(self):
+        async def flow():
+            app = DroidTierApp(self.config)
+            async with app.run_test(size=(120, 50)) as pilot:
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                tier = str(app.screen.query_one("#tier", Static).render())
+                self.assertIn("Degrau atual: home", tier)
+                self.assertIn("Pelos limites: droid", tier)
+                self.assertIn("troca para droid", tier)
+                limits = str(app.screen.query_one("#limits", Static).render())
+                self.assertIn("semanal", limits)
+                self.assertIn("100%", limits)
+                self.assertIn("vira em 4d 6h", limits)
+
+                await choose(app, pilot, "pin")
+                self.assertIsInstance(app.screen, PickTier)
+                await choose(app, pilot, "oc", widget="#tiers")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                self.assertEqual(self.model(), "custom:OC-glm-5.3-flash-0")
+                self.assertEqual(core.read_pin(), "oc")
+                self.assertIn("fixado em oc", str(app.screen.query_one("#tier", Static).render()))
+                self.assertIsNotNone(app.screen.query_one("#menu", OptionList).get_option("unpin"))
+
+                await choose(app, pilot, "restore")
+                self.assertIsInstance(app.screen, Confirm)
+                await pilot.click("#yes")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                self.assertEqual(self.model(), "claude-opus-5-5")
+                self.assertIsNone(core.read_pin())
+
+        asyncio.run(flow())
+
+    def test_until(self):
+        now = dt.datetime(2026, 9, 30, 12, 0, tzinfo=dt.timezone.utc)
+        self.assertEqual(until("2026-09-30T12:12:00Z", now), "12min")
+        self.assertEqual(until("2026-09-30T14:13:00Z", now), "2h13")
+        self.assertEqual(until("2026-10-04T18:00:00Z", now), "4d 6h")
+        self.assertEqual(until("2026-09-30T11:00:00Z", now), "virou")
+        self.assertEqual(until(None, now), "")
 
 
 if __name__ == "__main__":

@@ -14,11 +14,9 @@ Uso:
 """
 import os
 import sys
-import urllib.error
 
-from .core import (CONFIG_FILE, EXAMPLE_CONFIG, HOME_FILE, HOME_TIER, PIN_FILE, STATE_DIR,
-                   ConfigError, Droid, describe, fetch_limits, home_pool, load_config, log,
-                   pick_tier, read_pin)
+from . import core
+from .core import CONFIG_FILE, EXAMPLE_CONFIG, HOME_FILE, ConfigError, Droid, describe, home_pool, load_config
 
 
 def cmd_schedule(args):
@@ -67,57 +65,36 @@ def cmd_check(_):
 
 def cmd_pin(args):
     cfg = load_config()
-    names = [HOME_TIER] + [fb["name"] for fb in cfg["fallbacks"]]
-    if not args or args[0] not in names:
-        sys.exit(f"uso: droid-tier pin {{{'|'.join(names)}}}")
-    d = Droid(cfg)
-    before = d.current()
-    changed = d.go(args[0])
-    os.makedirs(STATE_DIR, exist_ok=True)
-    with open(PIN_FILE, "w", encoding="utf-8") as f:
-        f.write(args[0] + "\n")
-    log(f"pin {args[0]} (antes: {before})" + ("" if changed else ", nada a mudar"))
+    if not args:
+        sys.exit(f"uso: droid-tier pin {{{'|'.join(core.tier_names(cfg))}}}")
+    core.pin(cfg, args[0])
 
 
 def cmd_unpin(_):
-    if os.path.exists(PIN_FILE):
-        os.remove(PIN_FILE)
-    log("unpin, o timer volta a decidir")
+    core.unpin()
 
 
 def cmd_restore(_):
-    d = Droid(load_config())
-    before = d.current()
-    changed = d.go(HOME_TIER)
-    if os.path.exists(PIN_FILE):
-        os.remove(PIN_FILE)
-    log(f"restore: {before} -> home" if changed else "restore: ja nos padroes")
+    core.restore(load_config())
 
 
-def cmd_status_or_run(run):
+def cmd_status(_):
     cfg = load_config()
-    d = Droid(cfg)
-    before = d.current()
-    pin = read_pin()
     try:
-        limits = fetch_limits(cfg)
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        # Sem resposta confiavel, nao mexe: melhor ficar no degrau atual do que chutar.
-        log(f"falha ao consultar limites: {e}; mantendo {before}")
-        sys.exit(1)
+        st = core.status(cfg)
+    except core.LimitsError as e:
+        sys.exit(f"falha ao consultar limites: {e}")
+    print(f"degrau atual: {st['current']}" + (f" (fixado em {st['pin']})" if st["pin"] else ""))
+    print(f"degrau pelos limites (limiar {cfg['threshold']:.0f}%, padroes no pool "
+          f"{st['home_pool'] or 'nenhum'}): {st['tier']}")
+    print(describe(st["limits"]))
 
-    hp = home_pool(cfg, d.home)
-    tier, hits = pick_tier(cfg, limits, hp)
-    if not run:
-        print(f"degrau atual: {before}" + (f" (fixado em {pin})" if pin else ""))
-        print(f"degrau pelos limites (limiar {cfg['threshold']:.0f}%, padroes no pool {hp or 'nenhum'}): {tier}")
-        print(describe(limits))
-        return
-    if pin:
-        return
-    if d.go(tier):
-        why = "; ".join(f"{p} {', '.join(h)}" for p, h in hits.items() if h)
-        log(f"{before} -> {tier} ({'limites liberados' if tier == HOME_TIER else why})")
+
+def cmd_run(_):
+    try:
+        core.run(load_config())
+    except core.LimitsError:
+        sys.exit(1)
 
 
 COMMANDS = {
@@ -125,8 +102,8 @@ COMMANDS = {
     "schedule": cmd_schedule,
     "init": cmd_init,
     "check": cmd_check,
-    "status": lambda a: cmd_status_or_run(False),
-    "run": lambda a: cmd_status_or_run(True),
+    "status": cmd_status,
+    "run": cmd_run,
     "pin": cmd_pin,
     "unpin": cmd_unpin,
     "restore": cmd_restore,
@@ -141,7 +118,7 @@ def main():
         COMMANDS[cmd](sys.argv[2:])
     except ConfigError as e:
         if cmd == "run":
-            log(f"erro de configuracao: {e}; nada alterado")
+            core.log(f"erro de configuracao: {e}; nada alterado")
         else:
             print(f"erro: {e}", file=sys.stderr)
         sys.exit(2)

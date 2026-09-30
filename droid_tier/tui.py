@@ -1,10 +1,11 @@
 """Interface (Textual) para cadastrar providers, escolher modelos e montar fallbacks."""
+import datetime as dt
 import os
 import shutil
 
 from rich.text import Text
 from textual import on
-from textual.app import App, ComposeResult
+from textual.app import App
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
@@ -59,6 +60,11 @@ class State:
     def save_config(self):
         configedit.save_doc(self.doc, self.config_path)
 
+    def reload_settings(self):
+        """Rele do disco: o timer ou uma acao de degrau pode ter mudado o arquivo."""
+        if os.path.exists(self.settings_path):
+            self.settings = core.load_settings(self.settings_path)
+
     def save_settings(self):
         if not self.backed_up and os.path.exists(self.settings_path):
             shutil.copy2(self.settings_path, self.settings_path + ".droid-tier.bak")
@@ -105,39 +111,220 @@ class Confirm(ModalScreen[bool]):
 
 # ---------------------------------------------------------------- menu
 
+class PickTier(ModalScreen):
+    """Escolhe um degrau para fixar."""
+
+    def __init__(self, names, pinned):
+        super().__init__()
+        self.names = names
+        self.pinned = pinned
+
+    def compose(self):
+        with Vertical(classes="dialog"):
+            yield Static("Fixar em qual degrau? O timer para de trocar até você soltar.")
+            opts = [Option(("home (seus padrões)" if n == core.HOME_TIER else n)
+                           + ("  · fixado agora" if n == self.pinned else ""), id=n) for n in self.names]
+            yield OptionList(*opts, id="tiers")
+            with Horizontal(classes="buttons"):
+                yield Button("Cancelar", id="cancel")
+
+    def on_mount(self):
+        focus_list(self.query_one("#tiers", OptionList))
+
+    @on(OptionList.OptionSelected)
+    def chosen(self, event):
+        self.dismiss(event.option.id)
+
+    @on(Button.Pressed, "#cancel")
+    def cancel(self):
+        self.dismiss(None)
+
+
+def bar(pct, threshold, width=24):
+    pct = max(0.0, min(100.0, float(pct)))
+    filled = round(pct / 100 * width)
+    color = "green" if pct < 70 else "yellow" if pct < threshold else "red"
+    return Text("█" * filled, style=color) + Text("░" * (width - filled), style="grey37")
+
+
+def until(end, now=None):
+    """'2h13', '4d 6h', '12min' até o fim da janela."""
+    if not end:
+        return ""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    secs = (dt.datetime.fromisoformat(end.replace("Z", "+00:00")) - now).total_seconds()
+    if secs <= 0:
+        return "virou"
+    mins = int(secs // 60)
+    if mins < 60:
+        return f"{mins}min"
+    hours, mins = divmod(mins, 60)
+    if hours < 24:
+        return f"{hours}h{mins:02d}"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h"
+
+
+WINDOW_LABELS = {"fiveHour": "5 horas", "weekly": "semanal", "monthly": "mensal"}
+POOL_LABELS = {"standard": "Standard (Claude, GPT, Gemini)", "core": "Droid Core (GLM, DeepSeek...)"}
+
+
+def render_limits(limits, threshold, now=None):
+    out = Text()
+    for i, pool in enumerate(core.POOLS):
+        out.append(("\n" if i else "") + POOL_LABELS[pool] + "\n", style="bold")
+        data = limits.get(pool) or {}
+        if not data:
+            out.append("  sem dados\n", style="dim")
+        for w in core.WINDOWS:
+            b = data.get(w) or {}
+            if "usedPercent" not in b:
+                continue
+            left = until(b.get("windowEnd"), now)
+            out.append(f"  {WINDOW_LABELS[w]:<8} ")
+            out.append(bar(b["usedPercent"], threshold))
+            out.append(f" {b['usedPercent']:>3.0f}%")
+            if left:
+                out.append(f"  vira em {left}", style="dim")
+            out.append("\n")
+    return out
+
+
 class MainScreen(Screen):
-    BINDINGS = [Binding("q", "app.quit", "Sair")]
+    BINDINGS = [Binding("q", "app.quit", "Sair"), Binding("r", "refresh_status", "Atualizar")]
 
     def compose(self):
         yield Header()
         with Vertical(classes="body"):
-            yield Static(id="summary")
-            yield OptionList(
-                Option("Providers e modelos", id="providers"),
-                Option("Fallbacks", id="fallbacks"),
-                Option("Sair", id="quit"),
-                id="menu",
-            )
+            yield Static("consultando limites da Factory…", id="tier")
+            yield Static(id="limits")
+            yield OptionList(id="menu")
+            yield Static(id="summary", classes="hint")
         yield Footer()
+
+    def on_mount(self):
+        self.status = None
+        self.build_menu()
+        self.set_interval(60, self.action_refresh_status)
+        self.on_screen_resume()
 
     def on_screen_resume(self):
         st = self.app.state
         providers = st.providers()
         fbs = configedit.get_fallbacks(st.doc)
-        lines = [f"config: {st.config_path}", f"settings do Droid: {st.settings_path}", ""]
         counts = [f"{pid} ({len(p.get('models') or [])})" for pid, p in providers.items()]
-        lines.append("providers: " + (", ".join(counts) or "nenhum"))
-        lines.append("fallbacks: " + (" → ".join(fb["name"] for fb in fbs) or "nenhum"))
-        self.query_one("#summary", Static).update("\n".join(lines))
+        self.query_one("#summary", Static).update(
+            "providers: " + (", ".join(counts) or "nenhum")
+            + "   fallbacks: " + (" → ".join(fb["name"] for fb in fbs) or "nenhum")
+            + f"\nconfig: {st.config_path}\nsettings do Droid: {st.settings_path}")
+        self.action_refresh_status()
 
-    def on_mount(self):
-        self.on_screen_resume()
+    def build_menu(self):
+        pinned = (self.status or {}).get("pin")
+        ol = self.query_one("#menu", OptionList)
+        keep = ol.highlighted
+        ol.clear_options()
+        items = [("apply", "Aplicar agora o degrau indicado pelos limites"),
+                 ("pin", "Fixar um degrau…")]
+        if pinned:
+            items.append(("unpin", f"Soltar o degrau fixado ({pinned})"))
+        items += [("restore", "Restaurar meus padrões"),
+                  ("providers", "Providers e modelos"),
+                  ("fallbacks", "Fallbacks"),
+                  ("quit", "Sair")]
+        for oid, label in items:
+            ol.add_option(Option(label, id=oid))
+        focus_list(ol, keep)
+
+    def action_refresh_status(self):
+        self.run_worker(self.load_status, thread=True, exclusive=True, group="status")
+
+    def load_status(self):
+        try:
+            cfg = core.load_config(self.app.state.config_path)
+            st = core.status(cfg)
+            st["threshold"] = cfg["threshold"]
+            self.app.call_from_thread(self.show_status, st, None)
+        except core.ConfigError as e:
+            self.app.call_from_thread(self.show_status, None, f"Configuração incompleta: {e}")
+        except core.LimitsError as e:
+            self.app.call_from_thread(self.show_status, None, f"A API da Factory não respondeu: {e}")
+
+    def show_status(self, st, error):
+        self.status = st
+        tier_w = self.query_one("#tier", Static)
+        limits_w = self.query_one("#limits", Static)
+        if error:
+            tier_w.update(Text(error, style="yellow"))
+            limits_w.update("")
+            self.build_menu()
+            return
+        t = Text()
+        t.append("Degrau atual: ")
+        t.append(st["current"], style="bold")
+        if st["pin"]:
+            t.append(f"   fixado em {st['pin']}", style="bold magenta")
+        else:
+            t.append("   automático", style="dim")
+        t.append("\nPelos limites: ")
+        t.append(st["tier"], style="bold")
+        t.append(f"   (limiar {st['threshold']:.0f}%, seus padrões usam o pool {st['home_pool'] or 'nenhum'})",
+                 style="dim")
+        if not st["pin"] and st["current"] != st["tier"]:
+            t.append(f"\nO timer troca para {st['tier']} na próxima rodada; ou use Aplicar agora.", style="yellow")
+        tier_w.update(t)
+        limits_w.update(render_limits(st["limits"], st["threshold"]))
+        self.build_menu()
+
+    def act(self, fn):
+        """Roda uma ação do core fora da thread da interface (pode consultar a API) e atualiza tudo."""
+        st = self.app.state
+
+        def work():
+            try:
+                msg = fn(core.load_config(st.config_path))
+            except core.ConfigError as e:
+                self.app.call_from_thread(self.notify, str(e), severity="error", timeout=8)
+                return
+            except core.LimitsError as e:
+                self.app.call_from_thread(self.notify, f"A API da Factory não respondeu, nada alterado: {e}",
+                                          severity="error")
+                return
+            st.reload_settings()
+            self.app.call_from_thread(self.notify, msg or "Nada a mudar: o settings já está no degrau indicado.")
+            self.app.call_from_thread(self.action_refresh_status)
+
+        self.run_worker(work, thread=True, exclusive=True, group="action")
 
     @on(OptionList.OptionSelected, "#menu")
     def pick(self, event):
-        if event.option.id == "providers":
+        oid = event.option.id
+        if oid == "apply":
+            self.act(core.run)
+        elif oid == "pin":
+            try:
+                names = core.tier_names(core.load_config(self.app.state.config_path))
+            except core.ConfigError as e:
+                self.notify(str(e), severity="error")
+                return
+
+            def done(name):
+                if name:
+                    self.act(lambda cfg: core.pin(cfg, name))
+
+            self.app.push_screen(PickTier(names, (self.status or {}).get("pin")), done)
+        elif oid == "unpin":
+            self.act(lambda cfg: core.unpin())
+        elif oid == "restore":
+            def done(yes):
+                if yes:
+                    self.act(core.restore)
+
+            self.app.push_screen(Confirm("Restaurar seus padrões agora e soltar o degrau fixado?\n"
+                                         "Se os limites continuarem estourados, o timer volta a trocar."), done)
+        elif oid == "providers":
             self.app.push_screen(ProvidersScreen())
-        elif event.option.id == "fallbacks":
+        elif oid == "fallbacks":
             self.app.push_screen(FallbacksScreen())
         else:
             self.app.exit()
@@ -200,6 +387,7 @@ class ProvidersScreen(Screen):
         def go(yes):
             if not yes:
                 return
+            st.reload_settings()
             prov = catalog.Provider(pid, p.get("name") or pid, p["base_url"], p.get("kind") or "")
             catalog.sync_custom_models(st.settings, prov, [], "", "", managed)
             st.save_settings()
@@ -382,6 +570,7 @@ class ModelPickScreen(Screen):
     @on(Button.Pressed, "#save")
     def action_save(self):
         st = self.app.state
+        st.reload_settings()
         selected = [m for m in self.models if m.id in self.chosen]
         # Modelos marcados que nao vieram na lista (cadastrados a mao) continuam.
         known = {m.id for m in self.models}
@@ -625,7 +814,8 @@ class DroidTierApp(App):
     CSS = """
     .body { padding: 1 2; }
     .hint { color: $text-muted; margin-bottom: 1; }
-    #summary { margin-bottom: 1; }
+    #tier { margin-bottom: 1; }
+    #summary { margin-top: 1; }
     .form Label { margin-top: 1; }
     .form Button { margin-top: 1; }
     .buttons { height: auto; margin-top: 1; }
@@ -648,4 +838,5 @@ class DroidTierApp(App):
 
 
 def run_tui(config_path=None):
+    core.ECHO = False
     DroidTierApp(config_path).run()

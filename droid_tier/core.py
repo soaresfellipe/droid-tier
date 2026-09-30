@@ -5,7 +5,6 @@ Sem dependencias fora da biblioteca padrao, para o timer rodar leve.
 import datetime as dt
 import json
 import os
-import sys
 import tempfile
 import time
 import tomllib
@@ -107,9 +106,13 @@ class ConfigError(Exception):
     pass
 
 
+ECHO = True  # a TUI desliga: print no meio do Textual bagunca a tela
+
+
 def log(msg):
     line = f"{dt.datetime.now().astimezone():%Y-%m-%d %H:%M:%S%z} {msg}"
-    print(line)
+    if ECHO:
+        print(line)
     os.makedirs(STATE_DIR, exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
@@ -413,3 +416,87 @@ class Droid:
         set_roles(self.s, profile)
         write_settings(self.cfg["settings"], self.s)
         return True
+
+
+# ---------------------------------------------------------------- acoes (CLI e TUI)
+
+class LimitsError(Exception):
+    """A API da Factory nao respondeu; nada deve ser alterado."""
+
+
+def tier_names(cfg):
+    return [HOME_TIER] + [fb["name"] for fb in cfg["fallbacks"]]
+
+
+def write_pin(name):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(PIN_FILE, "w", encoding="utf-8") as f:
+        f.write(name + "\n")
+
+
+def clear_pin():
+    if os.path.exists(PIN_FILE):
+        os.remove(PIN_FILE)
+
+
+def pin(cfg, name):
+    if name not in tier_names(cfg):
+        raise ConfigError(f"degrau {name!r} nao existe; opcoes: {', '.join(tier_names(cfg))}")
+    d = Droid(cfg)
+    before = d.current()
+    changed = d.go(name)
+    write_pin(name)
+    msg = f"pin {name} (antes: {before})" + ("" if changed else ", nada a mudar")
+    log(msg)
+    return msg
+
+
+def unpin():
+    clear_pin()
+    msg = "unpin, o timer volta a decidir"
+    log(msg)
+    return msg
+
+
+def restore(cfg):
+    d = Droid(cfg)
+    before = d.current()
+    changed = d.go(HOME_TIER)
+    clear_pin()
+    msg = f"restore: {before} -> home" if changed else "restore: ja nos padroes"
+    log(msg)
+    return msg
+
+
+def status(cfg):
+    """Estado atual + decisao pelos limites. Levanta LimitsError sem rede."""
+    d = Droid(cfg)
+    try:
+        limits = fetch_limits(cfg)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise LimitsError(str(e)) from e
+    hp = home_pool(cfg, d.home)
+    tier, hits = pick_tier(cfg, limits, hp)
+    return {"droid": d, "current": d.current(), "pin": read_pin(), "limits": limits,
+            "home_pool": hp, "tier": tier, "hits": hits}
+
+
+def run(cfg):
+    """Aplica o degrau que os limites indicam. Devolve a mensagem do log, ou None se nada mudou."""
+    d = Droid(cfg)
+    before = d.current()
+    try:
+        st = status(cfg)
+    except LimitsError as e:
+        # Sem resposta confiavel, nao mexe: melhor ficar no degrau atual do que chutar.
+        log(f"falha ao consultar limites: {e}; mantendo {before}")
+        raise
+    if st["pin"]:
+        return None
+    tier, hits = st["tier"], st["hits"]
+    if not d.go(tier):
+        return None
+    why = "; ".join(f"{p} {', '.join(h)}" for p, h in hits.items() if h)
+    msg = f"{before} -> {tier} ({'limites liberados' if tier == HOME_TIER else why})"
+    log(msg)
+    return msg
