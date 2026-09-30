@@ -270,10 +270,26 @@ def api_key():
         with open(KEY_FILE, encoding="utf-8") as f:
             for line in f:
                 if line.strip().startswith("FACTORY_API_KEY="):
+                    _warn_key_file_perms()
                     return line.split("=", 1)[1].strip().strip("'\"")
     except FileNotFoundError:
         pass
     raise ConfigError(f"no FACTORY_API_KEY (neither in the environment nor in {KEY_FILE})")
+
+
+def _warn_key_file_perms():
+    """The file holds the Factory key: readable by group/others is worth a log line.
+
+    Logged once per state via _flag, so the 5-min schedule doesn't spam it."""
+    if os.name != "posix":
+        return
+    try:
+        import stat
+        loose = bool(stat.S_IMODE(os.stat(KEY_FILE).st_mode) & 0o077)
+    except OSError:
+        return
+    if _flag("keyfile-perms", loose):
+        log(f"warning: {KEY_FILE} is readable by group/others; run: chmod 600 {KEY_FILE}")
 
 
 def fetch_limits(cfg):

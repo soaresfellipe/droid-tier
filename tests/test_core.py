@@ -252,6 +252,30 @@ class WriteRetryTest(Base):
 
 
 
+class KeyFileTest(Base):
+    @unittest.skipIf(os.name != "posix", "POSIX permissions")
+    def test_warns_once_about_loose_key_file(self):
+        keyfile = os.path.join(self.dir.name, "factory-api-key.env")
+        with open(keyfile, "w") as f:
+            f.write("FACTORY_API_KEY=secret\n")
+        os.chmod(keyfile, 0o644)
+        with mock.patch.object(m, "KEY_FILE", keyfile), mock.patch.object(m, "log") as log:
+            self.assertEqual(m.api_key(), "secret")
+            self.assertEqual(m.api_key(), "secret")  # the 5-min schedule must not spam the log
+        self.assertEqual(len(log.call_args_list), 1)
+        self.assertIn("chmod 600", log.call_args[0][0])
+
+    @unittest.skipIf(os.name != "posix", "POSIX permissions")
+    def test_no_warning_for_0600(self):
+        keyfile = os.path.join(self.dir.name, "factory-api-key.env")
+        with open(keyfile, "w") as f:
+            f.write("FACTORY_API_KEY=secret\n")
+        os.chmod(keyfile, 0o600)
+        with mock.patch.object(m, "KEY_FILE", keyfile), mock.patch.object(m, "log") as log:
+            self.assertEqual(m.api_key(), "secret")
+        self.assertFalse(log.called)
+
+
 class ValidateLimitsTest(unittest.TestCase):
     def test_accepts_real_shape(self):
         data = {"limits": {"standard": {"fiveHour": {"usedPercent": 0}, "weekly": bucket(100)},
