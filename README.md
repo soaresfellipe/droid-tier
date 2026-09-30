@@ -19,6 +19,11 @@ window resets, it restores exactly what was there.
 your defaults  ->  Droid Core (GLM, DeepSeek...)  ->  external provider (OpenCode Go, OpenRouter...)
 ```
 
+<p align="center">
+  <img src="docs/screenshots/home.png" width="760"
+       alt="droid-tier home screen: Factory limits per window, the OpenCode Go quota and the tier actions">
+</p>
+
 ## Install
 
 Works on Linux and Windows. Requires Python 3.11+. With [uv](https://docs.astral.sh/uv/) or pipx:
@@ -73,6 +78,10 @@ your defaults.
    want. The list comes from the provider's own `/models` (what your key can
    access), with context size and image support from models.dev.
 
+   <img src="docs/screenshots/providers.png" width="760" alt="Picking a provider from the models.dev catalog">
+
+   <img src="docs/screenshots/models.png" width="760" alt="Checking which OpenCode Go models to add">
+
    Checked models are added to `customModels` in `~/.factory/settings.json` and
    show up in Droid's model picker, even outside a fallback. Models you added by
    hand are left alone; droid-tier only removes the ones it added. Before the first
@@ -81,6 +90,8 @@ your defaults.
 2. **Fallbacks**: for each fallback, choose where its models come from (Factory's
    Standard or Droid Core pool, or one of your providers) and the model and effort
    for each role. `k`/`j` reorder them.
+
+   <img src="docs/screenshots/fallback.png" width="620" alt="Fallback editor with a model and effort per role">
 
 ### Reasoning effort
 
