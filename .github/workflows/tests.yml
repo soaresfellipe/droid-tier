@@ -23,5 +23,6 @@ jobs:
       - run: python -m pyflakes droid_tier tests
       # Fails on known CVEs in the dependencies (textual, tomlkit, ...).
       # --skip-editable: droid-tier itself is the local checkout, nothing to audit.
-      - run: python -m pip-audit --skip-editable
+      # The module is pip_audit (underscore); pip-audit is only the script name.
+      - run: python -m pip_audit --skip-editable
       - run: python -m pytest -q
