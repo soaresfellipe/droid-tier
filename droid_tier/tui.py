@@ -87,9 +87,11 @@ class State:
         return configedit.get_providers(self.doc)
 
     def seen_native_ids(self):
-        """Native ids already used in the settings, the saved defaults or the fallbacks."""
+        """Native ids already used in the settings, the saved defaults, the fallbacks or [home]."""
         seen = {m for m, _ in core.snapshot(self.settings).values()}
         seen |= {m for m, _ in (core.read_home() or {}).values()}
+        home = configedit.get_home(self.doc) or {}
+        seen |= {(home.get(r) or "").split("@")[0] for r in core.ROLES}
         for fb in configedit.get_fallbacks(self.doc):
             if fb.get("pool"):
                 seen |= {(fb.get(r) or "").split("@")[0] for r in core.ROLES}
@@ -248,9 +250,11 @@ class MainScreen(Screen):
         providers = st.providers()
         fbs = configedit.get_fallbacks(st.doc)
         counts = [f"{pid} ({len(p.get('models') or [])})" for pid, p in providers.items()]
+        home = configedit.get_home(st.doc)
         self.query_one("#summary", Static).update(
             "providers: " + (", ".join(counts) or "none")
             + "   fallbacks: " + (" → ".join(fb["name"] for fb in fbs) or "none")
+            + "\ndefaults: " + ("[home] in config.toml" if home else "from Droid's settings.json")
             + f"\nconfig: {st.config_path}\nDroid settings: {st.settings_path}")
         self.action_refresh_status()
 
@@ -266,6 +270,7 @@ class MainScreen(Screen):
         items += [("restore", "Restore my defaults"),
                   ("providers", "Providers and models"),
                   ("fallbacks", "Fallbacks"),
+                  ("home", "Defaults (home)"),
                   ("quit", "Quit")]
         for oid, label in items:
             ol.add_option(Option(label, id=oid))
@@ -361,6 +366,8 @@ class MainScreen(Screen):
             self.app.push_screen(ProvidersScreen())
         elif oid == "fallbacks":
             self.app.push_screen(FallbacksScreen())
+        elif oid == "home":
+            self.app.push_screen(HomeEditScreen())
         else:
             self.app.quit_gracefully()
 
@@ -791,6 +798,15 @@ class FallbackEditScreen(Screen):
             listed = {v for _, v in options}
             options += [(f"{mid} (not listed)", mid) for mid in st.seen_native_ids()
                         if mid not in listed and core.infer_pool({"x": (mid, None)}) == pool]
+        elif source is Select.NULL:
+            # No source chosen (editing the defaults): they may mix pools, so offer
+            # every native model.
+            natives = st.natives or []
+            if not natives:
+                self.notify("`droid` not found in PATH, so Factory's models can't be listed.", severity="warning")
+            options = [(f"{m.name} ({m.id})", m.id) for m in natives if not m.deprecated]
+            listed = {v for _, v in options}
+            options += [(f"{mid} (not listed)", mid) for mid in st.seen_native_ids() if mid not in listed]
         elif isinstance(source, str) and source.startswith("provider:"):
             options = [(mid, mid) for mid in st.provider_models(source[9:])]
         values = {v for _, v in options}
@@ -884,6 +900,100 @@ class FallbackEditScreen(Screen):
         else:
             self.notify(f"Fallback {name} saved")
         self.app.pop_screen()
+
+
+# ---------------------------------------------------------------- home defaults
+
+class HomeEditScreen(FallbackEditScreen):
+    """Editor of the [home] defaults: the same role form as a fallback, but no
+    name and no external providers (the defaults use Factory's own models)."""
+
+    def __init__(self):
+        super().__init__(None)
+
+    def compose(self):
+        st = self.app.state
+        home_t = configedit.get_home(st.doc) or {}
+        # Prefill each role with what the defaults are now: [home] over the settings.
+        self.fb = {}
+        snapshot = core.snapshot(st.settings)
+        for role in core.ROLES:
+            model, effort = snapshot.get(role) or (None, None)
+            if model:
+                self.fb[role] = model + (f"@{effort}" if effort else "")
+        self.fb.update({k: v for k, v in home_t.items() if k in core.ROLES})
+        self.pool = home_t.get("pool")
+        current = f"pool:{self.pool}" if self.pool else Select.NULL
+        yield Header()
+        with VerticalScroll(classes="body form"):
+            yield Label("Your defaults (home): what Droid uses while the limits have room")
+            yield Label("Pool of the defaults (used by the tier decision)")
+            yield Select([("Factory: Standard pool (Claude, GPT, Gemini…)", "pool:standard"),
+                          ("Factory: Droid Core pool (GLM, DeepSeek…)", "pool:core")],
+                         value=current, prompt="inferred from the models", id="source")
+            yield Label("Model not in the list? Type its ID and press Enter")
+            yield Input(placeholder="e.g. glm-5.3-flash", id="extra")
+            yield Static("Role without a model = left out of [home]. Empty effort = whatever is in the settings.",
+                         classes="hint")
+            for role, label in ROLE_LABELS.items():
+                with Horizontal(classes="role"):
+                    yield Label(label, classes="role-label")
+                    yield Select([], prompt="don't change", id=f"m-{role}", classes="role-model")
+                    yield Select([(e, e) for e in catalog.EFFORTS], prompt="effort", id=f"e-{role}",
+                                 classes="role-effort")
+            yield Button("Save (ctrl+s)", variant="primary", id="save")
+        yield Footer()
+
+    @on(Button.Pressed, "#save")
+    def action_save(self):
+        st = self.app.state
+        source = self.query_one("#source", Select).value
+        new = {}
+        if isinstance(source, str) and source.startswith("pool:"):
+            new["pool"] = source[5:]
+        for role in core.ROLES:
+            model = self.query_one(f"#m-{role}", Select).value
+            effort = self.query_one(f"#e-{role}", Select).value
+            if model is Select.NULL:
+                continue
+            new[role] = model + (f"@{effort}" if effort is not Select.NULL else "")
+        if not any(r in new for r in core.ROLES):
+            self.notify("Choose a model for at least one role.", severity="error")
+            return
+        configedit.set_home(st.doc, new)
+        st.save_config()
+        try:
+            core.load_config(st.config_path)
+        except core.ConfigError as e:
+            self.notify(f"Saved, but the config has a problem: {e}", severity="warning", timeout=10)
+        else:
+            self.notify("Defaults (home) saved")
+
+        def apply(yes):
+            if not yes:
+                self.app.pop_screen()
+                return
+            self.run_worker(self.apply_home, thread=True, exclusive=True, group="apply-home")
+
+        self.app.push_screen(Confirm("Apply the defaults to Droid now?\n"
+                                     "If not, the schedule applies them on its next run."), apply)
+
+    def apply_home(self):
+        """Write the [home] models into Droid's settings, off the UI thread."""
+        try:
+            cfg = core.load_config(self.app.state.config_path)
+            d = core.Droid(cfg)
+            before = d.current()
+            changed = d.go(core.HOME_TIER)
+        except (core.ConfigError, OSError) as e:
+            self.app.call_from_thread(self.notify, f"couldn't apply the defaults: {e}",
+                                      severity="error", timeout=8)
+            return
+        msg = f"defaults applied (was: {before})" if changed else f"defaults saved; already applied ({before})"
+        core.log(msg)
+        self.app.state.reload_settings()
+        self.app.call_from_thread(self.notify, msg)
+        self.app.call_from_thread(self.app.pop_screen)
 
 
 # ---------------------------------------------------------------- app

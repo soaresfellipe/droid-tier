@@ -114,6 +114,9 @@ The editor only offers the efforts Droid accepts for each model:
 ```toml
 threshold = 95
 
+# Also move sessions touched in the last 24h (including missions) to the tier.
+# sessions = true
+
 [providers.opencode-go]
 base_url = "https://opencode.ai/zen/go/v1"
 
@@ -167,6 +170,10 @@ Optional top-level keys (before any table):
 - `home_pool`: the pool your defaults use (`standard`, `core` or `none`). Without
   it, it's inferred from the models: Claude/GPT/Gemini count as Standard;
   GLM/DeepSeek/Kimi/MiniMax/Qwen/Nemotron as Core; `custom:` uses no pool.
+
+The optional `[home]` table defines your defaults themselves (see
+[Your defaults](#your-defaults)); when it sets a `pool`, it replaces
+`home_pool` (using both is an error).
 - `settings`: path to Droid's settings.json.
 - `factory_api`: defaults to `https://app.factory.ai`.
 
@@ -185,19 +192,44 @@ A failed notification is logged and never blocks the switch.
 
 ### Your defaults
 
-On the first switch, the current 8 model/effort pairs are saved to
-`~/.local/state/droid-tier/home.json`. While that file exists, Droid is on a
+By default, droid-tier never touches them: your defaults are whatever is in
+`settings.json`. On the first switch, the current 8 model/effort pairs are saved
+to `~/.local/state/droid-tier/home.json`. While that file exists, Droid is on a
 fallback. On the way back, the settings are restored and the file is deleted.
 
+You can also define them yourself with a `[home]` table in `config.toml` (or the
+**Defaults (home)** entry in `droid-tier setup`): the model and effort of each
+role — session, spec, the three subagents and the mission defaults — as
+`model` or `model@effort`, plus an optional `pool` (`standard`, `core` or
+`none`). The `[home]` roles sit on top of the snapshot, and the schedule
+re-applies them on every run: a model you pick by hand while on home is
+overwritten on the next check. Roles left out of `[home]` keep the snapshot
+behavior. Without a `[home]`, nothing changes.
+
+```toml
+[home]
+pool = "standard"
+session = "claude-sonnet-5-5@high"
+spec = "claude-opus-5-5@high"
+```
+
 Model changes you make while on a fallback are lost when your defaults come back.
-To change your defaults during that time, edit `home.json`.
+To change your defaults during that time, edit the `[home]` table (or `home.json`
+if you don't use one).
 
 ### Sessions that are already open
 
 The switch applies to **new sessions and missions**. Droid stores each session's
 model in the session's own file, so an open session (or one resumed with
-`droid resume`) keeps the model it started with. If the limit runs out mid-session,
-switch with `/model`.
+`droid resume`) keeps the model it started with. If the limit runs out
+mid-session, switch with `/model`.
+
+With `sessions = true` in `config.toml`, droid-tier also rewrites the settings
+of sessions and missions touched in the last 24h: their model (and spec model)
+follows the tier on every switch. A model you picked with `/model` is left
+alone — only fields still showing the tier you're leaving are moved. The Droid
+process may write the session file back from memory; the next check (5 min)
+rewrites it again.
 
 ## Commands
 
@@ -211,6 +243,7 @@ droid-tier pin <tier>    pin a tier ("home" = your defaults)
 droid-tier unpin         hand control back to the schedule
 droid-tier restore       restore your defaults now and unpin
 droid-tier schedule      install | uninstall | status
+droid-tier update        update droid-tier itself (--check only compares versions)
 ```
 
 The switch history is in `~/.local/state/droid-tier/log`.
