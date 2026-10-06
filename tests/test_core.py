@@ -311,7 +311,6 @@ validator = "glm-5.3"
     def test_restores_snapshot_with_home_on_top(self):
         cfg = self.config(HOME_CONFIG)
         d = m.Droid(cfg)
-        original = copy.deepcopy(m.load_settings(self.settings_path))
         self.assertTrue(d.go("droid"))
         # The user edits [home] while on the fallback: the config wins.
         cfg = self.config(HOME_CONFIG + '\n[home]\nvalidator = "glm-5.3"\n')
@@ -363,7 +362,7 @@ class SessionsTest(Base):
 
     def test_active_sessions_follow_the_switch(self):
         cfg = self.config('sessions = true\n' + m.EXAMPLE_CONFIG)
-        recent = self.write_session("r", self.session())
+        self.write_session("r", self.session())
         self.write_session("old", self.session(), age_hours=30)
         self.write_session("bak", self.session())
         os.rename(os.path.join(os.path.dirname(self.settings_path), "sessions", "proj", "bak.settings.json"),
