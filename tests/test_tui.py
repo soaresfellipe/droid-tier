@@ -203,6 +203,81 @@ class TuiFlowTest(unittest.TestCase):
         self.assertEqual(home["session"], "claude-opus-5-5")  # prefilled from the settings
         self.assertEqual(home["spec"], "claude-opus-5-5@high")
 
+    def test_home_save_button_does_not_crash(self):
+        # Regression: the Save *button* dispatches Button.Pressed to every class
+        # in the MRO, so HomeEditScreen must not inherit the fallback's handler
+        # (it looked for #name, which the home form doesn't have).
+        self.home_config()
+
+        async def flow():
+            app = DroidTierApp(self.config)
+            async with app.run_test(size=(120, 50)) as pilot:
+                await pilot.pause()
+                app.push_screen(HomeEditScreen())
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                scr = app.screen
+                scr.query_one("#m-session", Select).value = "claude-opus-5-5"
+                await pilot.pause()
+                await pilot.click("#save")
+                await pilot.pause()
+                self.assertIsInstance(app.screen, Confirm)  # not the fallback's handler
+                await pilot.click("#no")
+                await pilot.pause()
+
+        asyncio.run(flow())
+        self.assertEqual(core.load_config(self.config)["home"]["session"], "claude-opus-5-5")
+
+    def test_pool_filter_allows_core_under_standard(self):
+        # A Droid Core model can be used while the Standard pool is the plan;
+        # the reverse is not possible. A new fallback starts with empty roles,
+        # so nothing is kept as the current value.
+        self.home_config()
+
+        async def flow():
+            app = DroidTierApp(self.config)
+            async with app.run_test(size=(120, 50)) as pilot:
+                await pilot.pause()
+                app.push_screen(FallbackEditScreen(None))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                scr = app.screen
+                scr.query_one("#source", Select).value = "pool:standard"
+                await pilot.pause()
+                models = [v for _, v in scr.query_one("#m-session", Select)._options]
+                self.assertIn("claude-opus-5-5", models)  # Standard
+                self.assertIn("glm-5.3-flash", models)  # Droid Core, allowed under Standard
+                scr.query_one("#source", Select).value = "pool:core"
+                await pilot.pause()
+                models = [v for _, v in scr.query_one("#m-session", Select)._options]
+                self.assertIn("glm-5.3-flash", models)
+                self.assertNotIn("claude-opus-5-5", models)  # Core can't reach Standard
+
+        asyncio.run(flow())
+
+    def test_fallback_save_button_uses_the_fallback_form(self):
+        self.home_config()
+
+        async def flow():
+            app = DroidTierApp(self.config)
+            async with app.run_test(size=(120, 50)) as pilot:
+                await pilot.pause()
+                app.push_screen(FallbackEditScreen(None))
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                scr = app.screen
+                scr.query_one("#name", Input).value = "extra"
+                scr.query_one("#source", Select).value = "pool:core"
+                await pilot.pause()
+                scr.query_one("#m-session", Select).value = "glm-5.3-flash"
+                await pilot.pause()
+                await pilot.click("#save")
+                await pilot.pause()
+
+        asyncio.run(flow())
+        names = [fb["name"] for fb in core.load_config(self.config)["fallbacks"]]
+        self.assertIn("extra", names)
+
     def test_edit_home_and_apply_now(self):
         self.home_config()
 

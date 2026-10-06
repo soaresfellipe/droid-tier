@@ -736,41 +736,29 @@ class FallbacksScreen(Screen):
         self.app.push_screen(Confirm(f"Remove the {fbs[i]['name']} fallback?"), go)
 
 
-class FallbackEditScreen(Screen):
+class RoleFormScreen(Screen):
+    """One model + effort Select per role. The model list follows the chosen
+    source; the fallback and the defaults (home) editors share this form.
+
+    The save handler lives in each subclass: two decorated handlers with the
+    same name in one hierarchy would both run on a single press (Textual
+    dispatches per class in the MRO), and the parent's would look for widgets
+    the child doesn't have."""
+
     BINDINGS = [Binding("escape", "app.pop_screen", "Back"), Binding("ctrl+s", "save", "Save")]
 
-    def __init__(self, index):
+    def __init__(self):
         super().__init__()
-        self.index = index
         self.extra = set()
+        self.fb = {}
 
-    def compose(self):
-        st = self.app.state
-        fbs = configedit.get_fallbacks(st.doc)
-        self.fb = fbs[self.index] if self.index is not None else {"name": ""}
-        sources = [("Factory: Standard pool (Claude, GPT, Gemini…)", "pool:standard"),
-                   ("Factory: Droid Core pool (GLM, DeepSeek…)", "pool:core")]
-        sources += [(f"Provider: {p.get('name') or pid}", f"provider:{pid}") for pid, p in st.providers().items()]
-        current = (f"pool:{self.fb['pool']}" if self.fb.get("pool")
-                   else f"provider:{self.fb['provider']}" if self.fb.get("provider") else Select.NULL)
-        yield Header()
-        with VerticalScroll(classes="body form"):
-            yield Label("Name")
-            yield Input(value=self.fb.get("name", ""), id="name")
-            yield Label("Where the models come from")
-            yield Select(sources, value=current, prompt="choose…", id="source")
-            yield Label("Model not in the list? Type its ID and press Enter")
-            yield Input(placeholder="e.g. deepseek-v4.1-flash", id="extra")
-            yield Static("Role without a model = unchanged. Empty effort = whatever is in the settings.",
-                         classes="hint")
-            for role, label in ROLE_LABELS.items():
-                with Horizontal(classes="role"):
-                    yield Label(label, classes="role-label")
-                    yield Select([], prompt="don't change", id=f"m-{role}", classes="role-model")
-                    yield Select([(e, e) for e in catalog.EFFORTS], prompt="effort", id=f"e-{role}",
-                                 classes="role-effort")
-            yield Button("Save (ctrl+s)", variant="primary", id="save")
-        yield Footer()
+    def role_rows(self):
+        for role, label in ROLE_LABELS.items():
+            with Horizontal(classes="role"):
+                yield Label(label, classes="role-label")
+                yield Select([], prompt="don't change", id=f"m-{role}", classes="role-model")
+                yield Select([(e, e) for e in catalog.EFFORTS], prompt="effort", id=f"e-{role}",
+                             classes="role-effort")
 
     def on_mount(self):
         st = self.app.state
@@ -790,14 +778,17 @@ class FallbackEditScreen(Screen):
         options = []
         if isinstance(source, str) and source.startswith("pool:"):
             pool = source[5:]
+            # A Droid Core model can be used while the Standard pool is the plan;
+            # the reverse isn't possible, so the Core pool shows Core only.
+            allowed = {"standard", "core"} if pool == "standard" else {pool}
             natives = st.natives or []
             if not natives:
                 self.notify("`droid` not found in PATH, so Factory's models can't be listed.", severity="warning")
-            options = [(f"{m.name} ({m.id})", m.id) for m in natives if m.pool == pool and not m.deprecated]
+            options = [(f"{m.name} ({m.id})", m.id) for m in natives if m.pool in allowed and not m.deprecated]
             # `droid exec --help` leaves out models that work; the ones already in use are added too.
             listed = {v for _, v in options}
             options += [(f"{mid} (not listed)", mid) for mid in st.seen_native_ids()
-                        if mid not in listed and core.infer_pool({"x": (mid, None)}) == pool]
+                        if mid not in listed and core.infer_pool({"x": (mid, None)}) in allowed]
         elif source is Select.NULL:
             # No source chosen (editing the defaults): they may mix pools, so offer
             # every native model.
@@ -860,6 +851,46 @@ class FallbackEditScreen(Screen):
             self.fill_models()
             self.notify(f"{mid} added to the options")
 
+    def read_roles(self):
+        """The role selects as {role: 'model' or 'model@effort'}."""
+        out = {}
+        for role in core.ROLES:
+            model = self.query_one(f"#m-{role}", Select).value
+            effort = self.query_one(f"#e-{role}", Select).value
+            if model is Select.NULL:
+                continue
+            out[role] = model + (f"@{effort}" if effort is not Select.NULL else "")
+        return out
+
+
+class FallbackEditScreen(RoleFormScreen):
+    def __init__(self, index):
+        super().__init__()
+        self.index = index
+
+    def compose(self):
+        st = self.app.state
+        fbs = configedit.get_fallbacks(st.doc)
+        self.fb = fbs[self.index] if self.index is not None else {"name": ""}
+        sources = [("Factory: Standard pool (Claude, GPT, Gemini…)", "pool:standard"),
+                   ("Factory: Droid Core pool (GLM, DeepSeek…)", "pool:core")]
+        sources += [(f"Provider: {p.get('name') or pid}", f"provider:{pid}") for pid, p in st.providers().items()]
+        current = (f"pool:{self.fb['pool']}" if self.fb.get("pool")
+                   else f"provider:{self.fb['provider']}" if self.fb.get("provider") else Select.NULL)
+        yield Header()
+        with VerticalScroll(classes="body form"):
+            yield Label("Name")
+            yield Input(value=self.fb.get("name", ""), id="name")
+            yield Label("Where the models come from")
+            yield Select(sources, value=current, prompt="choose…", id="source")
+            yield Label("Optional: a model ID that isn't in the list above")
+            yield Input(placeholder="e.g. custom:my-model-0", id="extra")
+            yield Static("Role without a model = unchanged. Empty effort = whatever is in the settings.",
+                         classes="hint")
+            yield from self.role_rows()
+            yield Button("Save (ctrl+s)", variant="primary", id="save")
+        yield Footer()
+
     @on(Button.Pressed, "#save")
     def action_save(self):
         st = self.app.state
@@ -877,12 +908,7 @@ class FallbackEditScreen(Screen):
             return
         kind, _, ref = source.partition(":")
         new = {"name": name, kind: ref}
-        for role in core.ROLES:
-            model = self.query_one(f"#m-{role}", Select).value
-            effort = self.query_one(f"#e-{role}", Select).value
-            if model is Select.NULL:
-                continue
-            new[role] = model + (f"@{effort}" if effort is not Select.NULL else "")
+        new.update(self.read_roles())
         if not any(r in new for r in core.ROLES):
             self.notify("Choose a model for at least one role.", severity="error")
             return
@@ -904,12 +930,9 @@ class FallbackEditScreen(Screen):
 
 # ---------------------------------------------------------------- home defaults
 
-class HomeEditScreen(FallbackEditScreen):
+class HomeEditScreen(RoleFormScreen):
     """Editor of the [home] defaults: the same role form as a fallback, but no
     name and no external providers (the defaults use Factory's own models)."""
-
-    def __init__(self):
-        super().__init__(None)
 
     def compose(self):
         st = self.app.state
@@ -922,8 +945,8 @@ class HomeEditScreen(FallbackEditScreen):
             if model:
                 self.fb[role] = model + (f"@{effort}" if effort else "")
         self.fb.update({k: v for k, v in home_t.items() if k in core.ROLES})
-        self.pool = home_t.get("pool")
-        current = f"pool:{self.pool}" if self.pool else Select.NULL
+        pool = home_t.get("pool")
+        current = f"pool:{pool}" if pool else Select.NULL
         yield Header()
         with VerticalScroll(classes="body form"):
             yield Label("Your defaults (home): what Droid uses while the limits have room")
@@ -931,16 +954,11 @@ class HomeEditScreen(FallbackEditScreen):
             yield Select([("Factory: Standard pool (Claude, GPT, Gemini…)", "pool:standard"),
                           ("Factory: Droid Core pool (GLM, DeepSeek…)", "pool:core")],
                          value=current, prompt="inferred from the models", id="source")
-            yield Label("Model not in the list? Type its ID and press Enter")
-            yield Input(placeholder="e.g. glm-5.3-flash", id="extra")
+            yield Label("Optional: a model ID that isn't in the list above")
+            yield Input(placeholder="e.g. custom:my-model-0", id="extra")
             yield Static("Role without a model = left out of [home]. Empty effort = whatever is in the settings.",
                          classes="hint")
-            for role, label in ROLE_LABELS.items():
-                with Horizontal(classes="role"):
-                    yield Label(label, classes="role-label")
-                    yield Select([], prompt="don't change", id=f"m-{role}", classes="role-model")
-                    yield Select([(e, e) for e in catalog.EFFORTS], prompt="effort", id=f"e-{role}",
-                                 classes="role-effort")
+            yield from self.role_rows()
             yield Button("Save (ctrl+s)", variant="primary", id="save")
         yield Footer()
 
@@ -948,15 +966,9 @@ class HomeEditScreen(FallbackEditScreen):
     def action_save(self):
         st = self.app.state
         source = self.query_one("#source", Select).value
-        new = {}
+        new = self.read_roles()
         if isinstance(source, str) and source.startswith("pool:"):
             new["pool"] = source[5:]
-        for role in core.ROLES:
-            model = self.query_one(f"#m-{role}", Select).value
-            effort = self.query_one(f"#e-{role}", Select).value
-            if model is Select.NULL:
-                continue
-            new[role] = model + (f"@{effort}" if effort is not Select.NULL else "")
         if not any(r in new for r in core.ROLES):
             self.notify("Choose a model for at least one role.", severity="error")
             return
