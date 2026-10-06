@@ -11,6 +11,7 @@ Usage:
   droid-tier restore       restore your defaults now and unpin
   droid-tier schedule [install|uninstall|status]
                            run `run` every 5 min (systemd on Linux, Scheduled Task on Windows)
+  droid-tier update        update droid-tier itself (--check only compares versions)
 """
 import os
 import sys
@@ -60,10 +61,15 @@ def cmd_check(_):
     cfg = load_config()
     d = Droid(cfg)
     natives = catalog.native_models()
-    hp = home_pool(cfg, d.home)
-    origin = "saved in " + HOME_FILE if d.saved_home else "in settings.json"
-    print(f"home: your defaults, {origin} (pool {hp or 'none'})")
-    print_profile(d.home)
+    if cfg["home"]:
+        hp = home_pool(cfg, d.home)
+        origin = f"in config.toml [home] (pool {hp or 'none'}; the schedule re-applies it)"
+    elif d.saved_home:
+        origin = "saved in " + HOME_FILE
+    else:
+        origin = "in settings.json"
+    print(f"home: your defaults, {origin}")
+    print_profile(d.home, d.s, natives)
     for fb in cfg["fallbacks"]:
         origin = f"pool {fb['pool']}" if fb.get("pool") else f"provider {fb.get('provider') or '(none)'}"
         print(f"{fb['name']} ({origin})")
@@ -72,6 +78,8 @@ def cmd_check(_):
         print(f"warning: the last fallback depends on the {cfg['fallbacks'][-1]['pool']} pool; "
               "without a fallback that has no pool, it stays even when exhausted")
     print(f"current tier: {d.current()}")
+    if cfg["sessions"]:
+        print("active sessions (last 24h) follow the tier too (sessions = true)")
 
 
 def cmd_pin(args):
@@ -110,6 +118,11 @@ def cmd_run(_):
         sys.exit(1)
 
 
+def cmd_update(args):
+    from . import update  # stdlib + git only; not imported by the scheduled run
+    sys.exit(update.run(args))
+
+
 COMMANDS = {
     "setup": cmd_setup,
     "schedule": cmd_schedule,
@@ -120,10 +133,15 @@ COMMANDS = {
     "pin": cmd_pin,
     "unpin": cmd_unpin,
     "restore": cmd_restore,
+    "update": cmd_update,
 }
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("-V", "--version"):
+        from . import __version__
+        print(f"droid-tier {__version__}")
+        return
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
     if cmd not in COMMANDS:
         sys.exit(__doc__)

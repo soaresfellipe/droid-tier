@@ -8,8 +8,8 @@ from unittest import mock
 
 import droid_tier.core as core
 from droid_tier import catalog
-from droid_tier.tui import (Confirm, DroidTierApp, FallbackEditScreen, FallbacksScreen, KeyScreen, MainScreen,
-                            ModelPickScreen, PickTier, ProviderPickScreen, ProvidersScreen, until)
+from droid_tier.tui import (Confirm, DroidTierApp, FallbackEditScreen, FallbacksScreen, HomeEditScreen, KeyScreen,
+                            MainScreen, ModelPickScreen, PickTier, ProviderPickScreen, ProvidersScreen, until)
 from textual.widgets import Input, OptionList, Select, SelectionList, Static
 
 from test_catalog import HELP, MD
@@ -165,6 +165,71 @@ class TuiFlowTest(unittest.TestCase):
             await pilot.press("ctrl+s")
             await pilot.pause()
             self.assertIsInstance(app.screen, FallbacksScreen)
+
+
+    def home_config(self):
+        # [home] needs a valid config: at least one fallback must exist
+        with open(self.config, "a") as f:
+            f.write('\n[[fallback]]\nname = "droid"\npool = "core"\nsession = "glm-5.3-flash@high"\n')
+
+    def test_edit_home_defaults(self):
+        self.home_config()
+
+        async def flow():
+            app = DroidTierApp(self.config)
+            async with app.run_test(size=(120, 50)) as pilot:
+                await pilot.pause()
+                await choose(app, pilot, "home")
+                self.assertIsInstance(app.screen, HomeEditScreen)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                scr = app.screen
+                # the roles come prefilled with the settings' defaults
+                self.assertEqual(scr.query_one("#m-session", Select).value, "claude-opus-5-5")
+                scr.query_one("#source", Select).value = "pool:standard"
+                await pilot.pause()
+                scr.query_one("#m-spec", Select).value = "claude-opus-5-5"
+                scr.query_one("#e-spec", Select).value = "high"
+                await pilot.pause()
+                await pilot.press("ctrl+s")
+                await pilot.pause()
+                # the Confirm asks to apply now; answer no: only the config is written
+                await pilot.click("#no")
+                await pilot.pause()
+
+        asyncio.run(flow())
+        home = core.load_config(self.config)["home"]
+        self.assertEqual(home["pool"], "standard")
+        self.assertEqual(home["session"], "claude-opus-5-5")  # prefilled from the settings
+        self.assertEqual(home["spec"], "claude-opus-5-5@high")
+
+    def test_edit_home_and_apply_now(self):
+        self.home_config()
+
+        async def flow():
+            app = DroidTierApp(self.config)
+            async with app.run_test(size=(120, 50)) as pilot:
+                await pilot.pause()
+                app.push_screen(HomeEditScreen())
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                scr = app.screen
+                scr.query_one("#m-validator", Select).value = "glm-5.3-flash"
+                await pilot.pause()
+                await pilot.press("ctrl+s")
+                await pilot.pause()
+                await pilot.click("#yes")
+                await pilot.pause()
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+
+        asyncio.run(flow())
+        with open(self.settings) as f:
+            s = json.load(f)
+        self.assertEqual(s["missionModelSettings"]["validationWorkerModel"], "glm-5.3-flash")
+        self.assertEqual(s["sessionDefaultSettings"]["model"], "claude-opus-5-5")  # untouched role
+        home = core.load_config(self.config)["home"]
+        self.assertEqual(home["validator"], "glm-5.3-flash")
 
 
 class StatusPanelTest(unittest.TestCase):

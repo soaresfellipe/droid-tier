@@ -90,5 +90,25 @@ def set_fallbacks(doc, fallbacks):
         doc["fallback"] = aot
 
 
+def get_home(doc):
+    home = doc.get("home")
+    return dict(home) if isinstance(home, dict) else None
+
+
+def set_home(doc, home):
+    """Write the optional [home] defaults; None removes the table."""
+    if "home" in doc:
+        del doc["home"]
+    if not home:
+        return
+    t = tomlkit.table()
+    if home.get("pool"):
+        t["pool"] = home["pool"]
+    for role in core.ROLES:
+        if home.get(role):
+            t[role] = home[role]
+    doc["home"] = t
+
+
 def fallback_users(doc, pid):
     return [fb["name"] for fb in get_fallbacks(doc) if fb.get("provider") == pid]

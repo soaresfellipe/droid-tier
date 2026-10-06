@@ -52,19 +52,47 @@ ROLES = {
     "validator": ("missionModelSettings", "validationWorkerModel", "validationWorkerReasoningEffort"),
 }
 
+# A session file (<id>.settings.json) only carries the session and spec roles;
+# subagents and mission roles are sessions of their own.
+SESSION_ROLE_FIELDS = {
+    "session": ("model", "reasoningEffort"),
+    "spec": ("specModeModel", "specModeReasoningEffort"),
+}
+
 EXAMPLE_CONFIG = '''\
 # droid-tier: fallbacks for when your Factory limits run out.
 #
-# Your Droid defaults (whatever is in settings.json) don't go here.
-# When leaving them, droid-tier saves a copy and restores it once the limit frees up.
+# Without [home] below, your Droid defaults are whatever is in settings.json:
+# droid-tier saves a copy when leaving them and restores it once the limit frees up.
 
 # Switch when any window (5h, weekly, monthly) goes over this %.
 threshold = 95
+
+# Also move sessions touched in the last 24h (including missions) to the tier:
+# their model in <id>.settings.json follows the switch, and a manual /model
+# choice is left alone. Off by default; the Droid process may write the file
+# back from memory, and the next check rewrites it again.
+# sessions = true
 
 # Pool your defaults use: "standard", "core" or "none".
 # Without this line it's inferred from the models (Claude/GPT/Gemini = standard,
 # GLM/DeepSeek/Kimi/MiniMax/Qwen/Nemotron = core, custom: = none).
 # home_pool = "standard"
+
+# Optional: define your defaults here, and `droid-tier setup` (Defaults in the
+# menu) manages them. With [home], the schedule re-applies these models on
+# every run; roles left out are not changed. No `provider`: the defaults use
+# Factory's own models.
+# [home]
+# pool = "standard"
+# session = "claude-sonnet-5-5@high"
+# spec = "claude-opus-5-5@high"
+# subagent_light = "claude-haiku-5-5@low"
+# subagent_medium = "claude-sonnet-5-5@medium"
+# subagent_heavy = "claude-opus-5-5@high"
+# orchestrator = "claude-sonnet-5-5@low"
+# worker = "claude-sonnet-5-5@high"
+# validator = "claude-haiku-5-5@high"
 
 # Fallback providers. Every model used with `provider = "..."` must exist in
 # customModels in ~/.factory/settings.json with this baseUrl.
@@ -173,6 +201,21 @@ def load_config(path=None):
     home_pool = cfg.get("home_pool")
     if home_pool not in (None, "none", *POOLS):
         raise ConfigError("home_pool must be standard, core or none")
+    home_t = cfg.get("home")
+    if home_t is not None:
+        if not isinstance(home_t, dict):
+            raise ConfigError("[home] must be a table")
+        if home_t.get("pool") not in (None, "none", *POOLS):
+            raise ConfigError("[home]: pool must be standard, core or none")
+        if home_t.get("pool") and home_pool:
+            raise ConfigError("[home]: use its pool or the top-level home_pool, not both")
+        unknown = set(home_t) - {"pool", *ROLES}
+        if unknown:
+            raise ConfigError(f"[home]: unknown fields {sorted(unknown)}")
+        if not set(home_t) & set(ROLES):
+            raise ConfigError("[home] defines no role")
+    if not isinstance(cfg.get("sessions", False), bool):
+        raise ConfigError("sessions must be true or false")
     seen = {HOME_TIER}
     for i, t in enumerate(fallbacks, 1):
         name = t.get("name")
@@ -201,6 +244,8 @@ def load_config(path=None):
         "settings": os.path.expanduser(cfg.get("settings", DEFAULT_SETTINGS)),
         "api": check_url(cfg.get("factory_api", DEFAULT_API), "factory_api").rstrip("/"),
         "home_pool": home_pool,
+        "home": home_t,
+        "sessions": bool(cfg.get("sessions", False)),
         "providers": providers,
         "fallbacks": fallbacks,
         "notify": _validate_notify(cfg.get("notify")),
@@ -244,6 +289,21 @@ def resolve_all(cfg, settings):
     return {fb["name"]: resolve_fallback(fb, cfg, settings) for fb in cfg["fallbacks"]}
 
 
+def resolve_home(home_t):
+    """[home] table -> {role: (Droid model id, effort or None)}.
+
+    Unlike a fallback, no provider lookup: the defaults use Factory's own
+    models (native or `custom:` ids)."""
+    out = {}
+    for role in ROLES:
+        spec = home_t.get(role)
+        if spec is None:
+            continue
+        model, _, effort = spec.partition("@")
+        out[role] = (model, effort or None)
+    return out
+
+
 def infer_pool(roles):
     """Pool a set of roles uses; None if it only uses customModels."""
     native = [m for m, _ in roles.values() if m and not m.startswith("custom:")]
@@ -255,8 +315,9 @@ def infer_pool(roles):
 
 
 def home_pool(cfg, home):
-    if cfg["home_pool"]:
-        return None if cfg["home_pool"] == "none" else cfg["home_pool"]
+    hp = (cfg.get("home") or {}).get("pool") or cfg["home_pool"]
+    if hp:
+        return None if hp == "none" else hp
     return infer_pool(home)
 
 
@@ -416,6 +477,54 @@ def snapshot(s):
     return {role: get_role(s, role) for role in ROLES}
 
 
+def rewrite_sessions(cfg, pairs, max_age=dt.timedelta(hours=24), now=None):
+    """Point recently active Droid sessions at the new tier (sessions = true).
+
+    pairs: [(old_profile, new_profile)]. A field is rewritten only when the
+    session's model is exactly the old tier's, so a manual /model choice
+    survives. Sessions (and missions) touched more than `max_age` ago are left
+    alone; Droid stores each session's model in <id>.settings.json, and the
+    running process may write the file back from memory — the next check
+    rewrites it again.
+    """
+    folder = os.path.join(os.path.dirname(cfg["settings"]), "sessions")
+    if not os.path.isdir(folder):
+        return 0
+    now = now or dt.datetime.now()
+    changed = 0
+    for sub in os.listdir(folder):
+        sdir = os.path.join(folder, sub)
+        if not os.path.isdir(sdir):
+            continue
+        for name in os.listdir(sdir):
+            if not name.endswith(".settings.json") or name.endswith(".bak"):
+                continue
+            path = os.path.join(sdir, name)
+            try:
+                if now - dt.datetime.fromtimestamp(os.stat(path).st_mtime) > max_age:
+                    continue
+                with open(path, encoding="utf-8") as f:
+                    s = json.load(f)
+            except (OSError, ValueError):
+                continue  # unreadable or malformed: leave it to Droid
+            original = json.dumps(s, sort_keys=True)
+            for old, new in pairs:
+                for role, (mk, ek) in SESSION_ROLE_FIELDS.items():
+                    om, oe = old.get(role) or (None, None)
+                    nm, ne = new.get(role) or (None, None)
+                    if not om or not nm or s.get(mk) != om:
+                        continue
+                    s[mk] = nm
+                    if ne is not None and (oe is None or s.get(ek) == oe):
+                        s[ek] = ne  # a custom effort on the session is kept
+                    if role == "session" and s.get("toolExecutionModeModelId") == om:
+                        s["toolExecutionModeModelId"] = nm
+            if json.dumps(s, sort_keys=True) != original:
+                write_settings(path, s)
+                changed += 1
+    return changed
+
+
 def matches(s, profile):
     return all(get_role(s, role)[0] == model and (effort is None or get_role(s, role)[1] == effort)
                for role, (model, effort) in profile.items())
@@ -470,12 +579,20 @@ class Droid:
         self.s = load_settings(cfg["settings"])
         self.fallbacks = resolve_all(cfg, self.s)
         self.saved_home = read_home()
-        self.home = self.saved_home or snapshot(self.s)
+        self.home_cfg = cfg.get("home")
+        self.home_only = resolve_home(self.home_cfg) if self.home_cfg else None
+        # Effective defaults: the snapshot (or home.json while on a fallback)
+        # with the [home] roles from the config on top of it.
+        self.home = self.saved_home if self.saved_home is not None else snapshot(self.s)
+        if self.home_only:
+            self.home = {**self.home, **self.home_only}
 
     def current(self):
         if self.saved_home is None:
             name = self.on_fallback()
-            return f"home (matches fallback {name})" if name else HOME_TIER
+            if name:
+                return f"home (matches fallback {name})"
+            return HOME_TIER if matches(self.s, self.home) else "mixed"
         return self.on_fallback() or "mixed"
 
     def on_fallback(self):
@@ -487,27 +604,42 @@ class Droid:
     def go(self, tier):
         """Bring the settings to the tier. Returns True if it wrote."""
         if tier == HOME_TIER:
+            pairs = [(profile, self.home) for profile in self.fallbacks.values()]
             if self.saved_home is None:
-                return False
-            set_roles(self.s, self.saved_home, exact=True)
-            write_settings(self.cfg["settings"], self.s)
-            os.remove(HOME_FILE)
-            self.saved_home = None
-            return True
-        profile = self.fallbacks[tier]
-        if self.saved_home is None:
-            if self.on_fallback():
-                # No saved defaults and the settings are already on a fallback:
-                # saving now would record the fallback as the user's defaults.
-                raise ConfigError("the settings are already on a fallback and no defaults are saved; "
-                                  "set your defaults in Droid or write home.json")
-            save_home(self.home)
-            self.saved_home = self.home
-        if matches(self.s, profile):
-            return False
-        set_roles(self.s, profile)
-        write_settings(self.cfg["settings"], self.s)
-        return True
+                changed = False
+                if self.home_only and not matches(self.s, self.home):
+                    set_roles(self.s, self.home_only)  # roles [home] doesn't define stay as they are
+                    write_settings(self.cfg["settings"], self.s)
+                    changed = True
+            else:
+                set_roles(self.s, self.home, exact=True)
+                write_settings(self.cfg["settings"], self.s)
+                os.remove(HOME_FILE)
+                self.saved_home = None
+                changed = True
+        else:
+            profile = self.fallbacks[tier]
+            pairs = [(self.home, profile)]
+            if self.saved_home is None:
+                if self.on_fallback() and not self.home_only:
+                    # No saved defaults and the settings are already on a fallback:
+                    # saving now would record the fallback as the user's defaults.
+                    # With [home] the config defines them, so saving is safe.
+                    raise ConfigError("the settings are already on a fallback and no defaults are saved; "
+                                      "set your defaults in Droid or write home.json")
+                save_home(self.home)
+                self.saved_home = self.home
+            if matches(self.s, profile):
+                changed = False
+            else:
+                set_roles(self.s, profile)
+                write_settings(self.cfg["settings"], self.s)
+                changed = True
+        if self.cfg.get("sessions"):
+            n = rewrite_sessions(self.cfg, pairs)
+            if n:
+                log(f"{n} active session(s) moved to {tier}")
+        return changed
 
 
 # ---------------------------------------------------------------- actions (CLI and TUI)
