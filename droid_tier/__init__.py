@@ -1,2 +1,2 @@
 """droid-tier: switches Droid's models according to Factory's usage limits."""
-__version__ = "0.6.0"
+__version__ = "0.6.1"

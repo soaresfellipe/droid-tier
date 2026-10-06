@@ -91,6 +91,11 @@ your defaults.
    Standard or Droid Core pool, or one of your providers) and the model and effort
    for each role. `k`/`j` reorder them.
 
+   The model list follows the chosen pool: **Standard** offers the Standard models
+   plus the Droid Core ones (a Core model can be used while the plan is Standard),
+   while **Droid Core** offers Core models only, since Standard isn't reachable
+   from there. The **Defaults (home)** editor uses the same list.
+
    <img src="docs/screenshots/fallback.png" width="620" alt="Fallback editor with a model and effort per role">
 
 ### Reasoning effort
